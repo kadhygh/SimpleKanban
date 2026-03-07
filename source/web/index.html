@@ -3,15 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SimpleKanban M1</title>
+    <title>SimpleKanban M2</title>
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/vendor/xterm.css" />
   </head>
   <body>
     <main class="app-shell">
       <section class="hero-card">
-        <p class="eyebrow">SimpleKanban · M1</p>
-        <h1>本地项目绑定</h1>
-        <p class="subtitle">先打通“本地服务 -> 网页连接 -> 工程选择 -> 路径展示”这条最小闭环。</p>
+        <p class="eyebrow">SimpleKanban · M2</p>
+        <h1>网页终端最小闭环</h1>
+        <p class="subtitle">在保留本地项目绑定的基础上，继续打通“网页终端展示 -> 双向输入输出 -> resize”这条最小链路。</p>
       </section>
 
       <section class="panel-grid">
@@ -48,7 +49,7 @@
             </div>
             <div>
               <span class="label">说明</span>
-              <span class="hint">M1 仅实现项目选择和路径展示，终端会话将在下一阶段接入。</span>
+              <span class="hint">M1 已通过人工验证；M2 当前正在接入网页终端与最小执行器注入。</span>
             </div>
           </div>
         </article>
@@ -60,8 +61,77 @@
         </div>
         <pre id="status-log" class="status-log"></pre>
       </section>
+
+      <section id="terminal-panel" class="panel terminal-panel">
+        <div class="panel-head terminal-head">
+          <div>
+            <h2>网页终端</h2>
+            <p class="hint terminal-subtitle">当前阶段仅支持单机、单项目、单活跃终端。</p>
+          </div>
+
+          <div class="terminal-actions">
+            <button id="open-terminal" class="primary-button">启动终端</button>
+            <button id="reconnect-terminal" class="secondary-button">重连</button>
+          </div>
+        </div>
+
+        <div class="terminal-meta">
+          <div>
+            <span class="label">连接状态</span>
+            <strong id="terminal-conn">未连接</strong>
+          </div>
+          <div>
+            <span class="label">会话状态</span>
+            <strong id="terminal-session">未创建</strong>
+          </div>
+          <div>
+            <span class="label">终端尺寸</span>
+            <strong id="terminal-size">-- x --</strong>
+          </div>
+        </div>
+
+        <div id="terminal-root" class="terminal-root"></div>
+      </section>
+
+      <section id="executor-panel" class="panel executor-panel">
+        <div class="panel-head executor-head">
+          <div>
+            <h2>执行器注入</h2>
+            <p class="hint executor-subtitle">先用一个默认执行器样例，把“生成项目总结文档”的命令注入当前网页终端。</p>
+          </div>
+
+          <div class="executor-actions">
+            <button id="refresh-executors" class="secondary-button">刷新执行器</button>
+            <button id="run-executor" class="primary-button">注入到终端</button>
+          </div>
+        </div>
+
+        <div class="executor-grid">
+          <div class="executor-field">
+            <label class="label" for="executor-select">执行器</label>
+            <select id="executor-select" class="executor-select"></select>
+          </div>
+
+          <div class="executor-field">
+            <span class="label">执行器状态</span>
+            <strong id="executor-status">未加载</strong>
+          </div>
+        </div>
+
+        <div class="executor-card">
+          <span class="label">简介</span>
+          <p id="executor-description" class="sub-value">等待加载执行器列表。</p>
+        </div>
+
+        <div class="executor-card">
+          <span class="label">命令预览</span>
+          <pre id="executor-command" class="command-preview">等待加载命令预览。</pre>
+        </div>
+      </section>
     </main>
 
+    <script src="/vendor/xterm.js"></script>
+    <script src="/vendor/xterm-addon-fit.js"></script>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

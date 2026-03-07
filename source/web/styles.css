@@ -23,11 +23,15 @@ body {
   color: var(--text);
 }
 
-button {
+button,
+select {
   border: 0;
   border-radius: 10px;
   padding: 0.8rem 1.2rem;
   font: inherit;
+}
+
+button {
   cursor: pointer;
 }
 
@@ -57,7 +61,8 @@ button {
 
 h1,
 h2,
-p {
+p,
+pre {
   margin: 0;
 }
 
@@ -126,7 +131,14 @@ p {
   border: 1px solid var(--panel-border);
 }
 
-.status-log {
+button:disabled,
+select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.status-log,
+.command-preview {
   min-height: 180px;
   padding: 16px;
   border-radius: 12px;
@@ -136,6 +148,7 @@ p {
   line-height: 1.6;
   overflow: auto;
   white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .success {
@@ -144,4 +157,77 @@ p {
 
 .warn {
   color: var(--warn);
+}
+
+.log-panel {
+  min-height: 240px;
+}
+
+.terminal-panel,
+.executor-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.terminal-head,
+.executor-head {
+  align-items: flex-start;
+}
+
+.terminal-subtitle,
+.executor-subtitle {
+  margin-top: 8px;
+}
+
+.terminal-actions,
+.executor-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.terminal-meta,
+.executor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.terminal-root {
+  width: 100%;
+  height: 420px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #0c0e13;
+  border: 1px solid #232836;
+  overflow: hidden;
+}
+
+.executor-card,
+.executor-field {
+  display: grid;
+  gap: 8px;
+}
+
+.executor-select {
+  width: 100%;
+  background: #0c0e13;
+  color: var(--text);
+  border: 1px solid #232836;
+}
+
+.command-preview {
+  min-height: 140px;
+}
+
+.terminal-root .xterm {
+  height: 100%;
+}
+
+.terminal-root .xterm-viewport {
+  border-radius: 8px;
+}
+
+.xterm {
+  height: 100%;
 }

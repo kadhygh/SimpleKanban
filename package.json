@@ -1,7 +1,13 @@
-﻿{
+{
   "name": "simple-kanban",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@xterm/addon-fit": "latest",
+    "@xterm/xterm": "latest",
+    "node-pty": "latest",
+    "ws": "latest"
+  },
   "scripts": {
     "dev": "node source/server/server.mjs",
     "start": "node source/server/server.mjs"
