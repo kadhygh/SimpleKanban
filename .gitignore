@@ -1,1 +1,5 @@
-source/
+﻿node_modules/
+source/**/node_modules/
+source/**/dist/
+source/server/data/
+*.log

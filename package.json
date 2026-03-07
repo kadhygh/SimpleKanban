@@ -1,0 +1,9 @@
+﻿{
+  "name": "simple-kanban",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node source/server/server.mjs",
+    "start": "node source/server/server.mjs"
+  }
+}

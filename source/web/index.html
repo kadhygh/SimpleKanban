@@ -1,0 +1,67 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SimpleKanban M1</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero-card">
+        <p class="eyebrow">SimpleKanban · M1</p>
+        <h1>本地项目绑定</h1>
+        <p class="subtitle">先打通“本地服务 -> 网页连接 -> 工程选择 -> 路径展示”这条最小闭环。</p>
+      </section>
+
+      <section class="panel-grid">
+        <article class="panel">
+          <div class="panel-head">
+            <h2>当前项目</h2>
+            <button id="refresh-project" class="secondary-button">刷新</button>
+          </div>
+
+          <div class="project-card">
+            <p class="label">工程目录</p>
+            <p id="project-path" class="path-value">尚未选择工程目录</p>
+            <p id="project-name" class="sub-value">等待配置</p>
+          </div>
+
+          <div class="actions">
+            <button id="select-project" class="primary-button">选择工程</button>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>服务状态</h2>
+          </div>
+
+          <div class="status-list">
+            <div>
+              <span class="label">连接</span>
+              <strong id="health-status">检查中...</strong>
+            </div>
+            <div>
+              <span class="label">API</span>
+              <strong id="api-version">等待响应</strong>
+            </div>
+            <div>
+              <span class="label">说明</span>
+              <span class="hint">M1 仅实现项目选择和路径展示，终端会话将在下一阶段接入。</span>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="panel log-panel">
+        <div class="panel-head">
+          <h2>状态输出</h2>
+        </div>
+        <pre id="status-log" class="status-log"></pre>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
