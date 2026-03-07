@@ -13,7 +13,9 @@ const terminalSize = document.querySelector('#terminal-size');
 const terminalPanel = document.querySelector('#terminal-panel');
 const terminalRoot = document.querySelector('#terminal-root');
 const executorSelect = document.querySelector('#executor-select');
+const executorOutputName = document.querySelector('#executor-output-name');
 const executorStatus = document.querySelector('#executor-status');
+const executorStatusDetail = document.querySelector('#executor-status-detail');
 const executorDescription = document.querySelector('#executor-description');
 const executorCommand = document.querySelector('#executor-command');
 const refreshExecutorsButton = document.querySelector('#refresh-executors');
@@ -31,10 +33,29 @@ let resizeObserver = null;
 let resizeTimer = null;
 let executors = [];
 let selectedExecutorId = null;
+const defaultExecutorOutputName = 'project-summary';
+let executorStatusLock = null;
 let lastKnownTerminalSize = {
   cols: null,
   rows: null,
 };
+
+function normalizeExecutorOutputName(value) {
+  const normalized = String(value ?? '')
+    .trim()
+    .replace(/\.md$/i, '')
+    .replace(/[^a-zA-Z0-9-_]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  return normalized || defaultExecutorOutputName;
+}
+
+function getExecutorParams() {
+  return {
+    outputFileName: normalizeExecutorOutputName(executorOutputName?.value),
+  };
+}
 
 function appendLog(message, tone = '') {
   const timestamp = new Date().toLocaleTimeString();
@@ -51,9 +72,22 @@ function setTerminalConnectionState(text, tone = '') {
   terminalConn.className = tone;
 }
 
-function setExecutorStatus(text, tone = '') {
+function setExecutorStatus(text, tone = '', detail = '') {
   executorStatus.textContent = text;
-  executorStatus.className = tone;
+  executorStatus.className = `status-badge ${tone}`.trim();
+
+  if (executorStatusDetail) {
+    executorStatusDetail.textContent = detail || ' ';
+  }
+}
+
+function lockExecutorStatus(text, tone = '', detail = '') {
+  executorStatusLock = { text, tone, detail };
+  setExecutorStatus(text, tone, detail);
+}
+
+function clearExecutorStatusLock() {
+  executorStatusLock = null;
 }
 
 function getSelectedExecutor() {
@@ -65,7 +99,14 @@ function getExecutorPreview(executor) {
     return '等待加载命令预览。';
   }
 
-  return executor.commandPreview ?? executor.previewCommand ?? executor.command ?? '当前执行器未提供命令预览。';
+  const basePreview = executor.commandPreview ?? executor.previewCommand ?? executor.command ?? '当前执行器未提供命令预览。';
+
+  if (executor.id !== 'project-summary-doc') {
+    return basePreview;
+  }
+
+  const { outputFileName } = getExecutorParams();
+  return basePreview.replace(/project-summary\.md/gi, `${outputFileName}.md`);
 }
 
 function updateExecutorControls() {
@@ -74,28 +115,35 @@ function updateExecutorControls() {
   const hasRunningTerminal = currentSession?.status === 'running';
 
   executorSelect.disabled = !hasExecutors;
+  executorOutputName.disabled = !hasProject || !hasExecutors;
   refreshExecutorsButton.disabled = !hasProject;
   runExecutorButton.disabled = !hasProject || !hasExecutors;
 
+  if (executorStatusLock) {
+    setExecutorStatus(executorStatusLock.text, executorStatusLock.tone, executorStatusLock.detail);
+    return;
+  }
+
   if (!hasProject) {
-    setExecutorStatus('请先选择工程', 'warn');
+    setExecutorStatus('请先选择工程', 'warn', '选择工程目录后，才能加载执行器并注入命令。');
     return;
   }
 
   if (!hasExecutors) {
-    setExecutorStatus('未加载执行器', 'warn');
+    setExecutorStatus('未加载执行器', 'warn', '当前项目下还没有可用执行器，或执行器列表尚未加载完成。');
     return;
   }
 
   if (!hasRunningTerminal) {
-    setExecutorStatus('请先启动终端', 'warn');
+    setExecutorStatus('请先启动终端', 'warn', '执行器命令会被注入当前网页终端，因此需要先启动终端会话。');
     return;
   }
 
-  setExecutorStatus('可注入', 'success');
+  setExecutorStatus('可注入', 'success', '当前执行器与参数已就绪，可以直接把命令注入终端执行。');
 }
 
 function renderProject(project) {
+  clearExecutorStatusLock();
   currentProject = project ?? null;
 
   if (!project) {
@@ -115,6 +163,7 @@ function renderProject(project) {
 }
 
 function renderSession(session) {
+  clearExecutorStatusLock();
   currentSession = session ?? null;
 
   if (!session) {
@@ -136,6 +185,7 @@ function renderSession(session) {
 }
 
 function renderExecutors() {
+  clearExecutorStatusLock();
   executorSelect.innerHTML = '';
 
   if (executors.length === 0) {
@@ -390,6 +440,7 @@ async function loadExecutors() {
   }
 
   refreshExecutorsButton.disabled = true;
+  clearExecutorStatusLock();
 
   try {
     const response = await fetch('/api/executors', { cache: 'no-store' });
@@ -397,10 +448,12 @@ async function loadExecutors() {
     executors = payload.executors ?? [];
     renderExecutors();
     appendLog(`已加载执行器：${executors.length} 个。`);
+    setExecutorStatus('已加载', 'success', '执行器列表已刷新；如果终端已启动，现在可以继续注入命令。');
   } catch (error) {
     executors = [];
     renderExecutors();
     appendLog(`读取执行器列表失败：${error.message}`, 'warn');
+    setExecutorStatus('加载失败', 'warn', '执行器列表读取失败，请稍后重试。');
   } finally {
     refreshExecutorsButton.disabled = false;
     updateExecutorControls();
@@ -417,11 +470,12 @@ async function runExecutor() {
 
   if (currentSession?.status !== 'running') {
     appendLog('请先启动网页终端，再注入执行器命令。', 'warn');
-    setExecutorStatus('请先启动终端', 'warn');
+    setExecutorStatus('请先启动终端', 'warn', '当前没有运行中的终端会话，无法把命令注入进去。');
     return;
   }
 
   runExecutorButton.disabled = true;
+  lockExecutorStatus('注入中', 'warn', '命令正在发送到当前网页终端，请等待终端输出结果。');
 
   try {
     const response = await fetch('/api/executors/run', {
@@ -429,7 +483,10 @@ async function runExecutor() {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ executorId: selectedExecutor.id }),
+      body: JSON.stringify({
+        executorId: selectedExecutor.id,
+        params: getExecutorParams(),
+      }),
     });
     const payload = await response.json();
 
@@ -439,11 +496,12 @@ async function runExecutor() {
 
     executorCommand.textContent = payload.command ?? getExecutorPreview(selectedExecutor);
     appendLog(`已将执行器“${selectedExecutor.name}”注入终端。`, 'success');
-    setExecutorStatus('已注入', 'success');
+    const outputPath = payload.params?.summaryRelativePath ?? `docs/${getExecutorParams().outputFileName}.md`;
+    lockExecutorStatus('已注入', 'success', `命令已写入终端，预期会生成 ${outputPath}。`);
     terminal?.focus();
   } catch (error) {
     appendLog(`执行器注入失败：${error.message}`, 'warn');
-    setExecutorStatus('注入失败', 'warn');
+    lockExecutorStatus('注入失败', 'warn', error.message || '命令注入失败，请查看状态输出与终端信息。');
   } finally {
     runExecutorButton.disabled = false;
     updateExecutorControls();
@@ -482,10 +540,25 @@ async function selectProject() {
 }
 
 executorSelect.addEventListener('change', () => {
+  clearExecutorStatusLock();
   selectedExecutorId = executorSelect.value;
   const selectedExecutor = getSelectedExecutor();
   executorDescription.textContent = selectedExecutor?.description ?? '当前执行器未提供简介。';
   executorCommand.textContent = getExecutorPreview(selectedExecutor);
+  updateExecutorControls();
+});
+executorOutputName.addEventListener('input', () => {
+  clearExecutorStatusLock();
+  const normalized = normalizeExecutorOutputName(executorOutputName.value);
+  const selectedExecutor = getSelectedExecutor();
+  executorCommand.textContent = getExecutorPreview(selectedExecutor);
+
+  if (executorOutputName.value.trim() !== normalized) {
+    setExecutorStatus('参数已规范化', 'warn', `输入已按安全规则处理，最终会生成 docs/${normalized}.md。`);
+    return;
+  }
+
+  setExecutorStatus('参数已更新', 'success', `当前预期输出文件为 docs/${normalized}.md。`);
   updateExecutorControls();
 });
 selectProjectButton.addEventListener('click', selectProject);

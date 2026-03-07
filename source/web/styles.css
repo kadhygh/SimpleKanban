@@ -209,11 +209,51 @@ select:disabled {
   gap: 8px;
 }
 
+.executor-status-field {
+  align-content: start;
+}
+
+.executor-status-bar {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #232836;
+  background: #0c0e13;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+}
+
 .executor-select {
   width: 100%;
   background: #0c0e13;
   color: var(--text);
   border: 1px solid #232836;
+}
+
+.executor-input {
+  width: 100%;
+  border-radius: 10px;
+  padding: 0.8rem 1rem;
+  font: inherit;
+  background: #0c0e13;
+  color: var(--text);
+  border: 1px solid #232836;
+}
+
+.executor-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .command-preview {

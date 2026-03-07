@@ -113,8 +113,24 @@
           </div>
 
           <div class="executor-field">
+            <label class="label" for="executor-output-name">总结文档文件名</label>
+            <input
+              id="executor-output-name"
+              class="executor-input"
+              type="text"
+              value="project-summary"
+              placeholder="例如：project-summary"
+              spellcheck="false"
+            />
+            <p class="hint">将生成到 `docs/&lt;文件名&gt;.md`，这里只填文件名，不需要写扩展名。</p>
+          </div>
+
+          <div class="executor-field executor-status-field">
             <span class="label">执行器状态</span>
-            <strong id="executor-status">未加载</strong>
+            <div class="executor-status-bar">
+              <strong id="executor-status" class="status-badge">未加载</strong>
+              <span id="executor-status-detail" class="hint">等待选择工程并加载执行器。</span>
+            </div>
           </div>
         </div>
 

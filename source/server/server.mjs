@@ -5,7 +5,7 @@ import { URL } from 'node:url';
 
 import WebSocket, { WebSocketServer } from 'ws';
 
-import { buildExecutorCommand, listExecutorProfiles } from './lib/executor-profiles.mjs';
+import { buildExecutorCommand, listExecutorProfiles, normalizeExecutorParams } from './lib/executor-profiles.mjs';
 import { readCurrentProject, saveCurrentProject } from './lib/project-store.mjs';
 import { ensureDirectoryPath, selectProjectFolder } from './lib/folder-dialog.mjs';
 import { createTerminalSessionManager } from './lib/terminal-session-manager.mjs';
@@ -174,6 +174,30 @@ async function handleExecutorList(response) {
   });
 }
 
+async function handleExecutorPreview(request, response) {
+  try {
+    const body = await readBody(request);
+    const executorId = String(body.executorId ?? '').trim();
+
+    if (!executorId) {
+      sendJson(response, 400, { error: 'executorId is required.' });
+      return;
+    }
+
+    const params = normalizeExecutorParams(executorId, body.params ?? {});
+    const command = buildExecutorCommand(executorId, params);
+
+    sendJson(response, 200, {
+      executorId,
+      params,
+      command,
+    });
+  } catch (error) {
+    console.error(error);
+    sendJson(response, 500, { error: error.message || 'Failed to preview executor command.' });
+  }
+}
+
 async function handleExecutorInject(request, response) {
   try {
     const body = await readBody(request);
@@ -191,11 +215,13 @@ async function handleExecutorInject(request, response) {
       return;
     }
 
-    const command = buildExecutorCommand(executorId);
+    const params = normalizeExecutorParams(executorId, body.params ?? {});
+    const command = buildExecutorCommand(executorId, params);
     terminalSessionManager.write(`${command}\r`);
 
     sendJson(response, 200, {
       executorId,
+      params,
       command,
       session: terminalSessionManager.getSnapshot(),
     });
@@ -283,6 +309,11 @@ async function requestHandler(request, response) {
 
   if (request.method === 'GET' && requestUrl.pathname === '/api/executors') {
     await handleExecutorList(response);
+    return;
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/executors/preview') {
+    await handleExecutorPreview(request, response);
     return;
   }
 
