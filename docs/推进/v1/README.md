@@ -31,6 +31,7 @@ v1 聚焦的不是完整 TaskCard 系统，而是先稳定打通以下最小闭�
 
 ## 参考关系
 
+- 项目定位与设计原则：`docs/项目定位.md`
 - 总体方案以 `prepare.md` 为准
 - 全局推进状态以 `docs/dashboard.md` 为准
 - `docs/rescource` 中的 `vibekanban` 分析资料可以按需参考
