@@ -295,6 +295,41 @@ async function handleTaskCreate(request, response) {
   }
 }
 
+async function handleTaskNoteUpdate(request, response) {
+  try {
+    const body = await readBody(request);
+    const taskId = String(body.taskId ?? '').trim();
+
+    if (!taskId) {
+      sendJson(response, 400, { error: 'taskId is required.' });
+      return;
+    }
+
+    const task = await getTask(taskId);
+
+    if (!task) {
+      sendJson(response, 404, { error: 'Task not found.' });
+      return;
+    }
+
+    const taskNoteContent = body.content == null ? '' : String(body.content);
+    const trimmedContent = taskNoteContent.trim();
+    const updatedTask = await updateTask(task.id, {
+      note: trimmedContent
+        ? {
+            content: trimmedContent,
+            updatedAt: now(),
+          }
+        : null,
+    });
+
+    sendJson(response, 200, { task: updatedTask });
+  } catch (error) {
+    console.error(error);
+    sendJson(response, 500, { error: error.message || 'Failed to save task note.' });
+  }
+}
+
 async function handleTaskRun(request, response) {
   try {
     const body = await readBody(request);
@@ -494,6 +529,11 @@ async function requestHandler(request, response) {
 
   if (request.method === 'POST' && requestUrl.pathname === '/api/tasks') {
     await handleTaskCreate(request, response);
+    return;
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/tasks/note') {
+    await handleTaskNoteUpdate(request, response);
     return;
   }
 

@@ -34,6 +34,25 @@ function normalizeTaskStatus(status) {
   return TASK_STATUSES.has(status) ? status : 'idle';
 }
 
+function normalizeTaskNote(note, fallbackUpdatedAt = now()) {
+  if (note == null) {
+    return null;
+  }
+
+  const content = typeof note === 'string'
+    ? note.trim()
+    : String(note.content ?? '').trim();
+
+  if (!content) {
+    return null;
+  }
+
+  return {
+    content,
+    updatedAt: typeof note === 'object' && note.updatedAt ? String(note.updatedAt) : fallbackUpdatedAt,
+  };
+}
+
 function mapTask(task) {
   if (!task?.id) {
     return null;
@@ -50,6 +69,7 @@ function mapTask(task) {
     lastStatusAt: task.lastStatusAt ?? null,
     lastTerminalActivityAt: task.lastTerminalActivityAt ?? null,
     lastTerminalOutput: task.lastTerminalOutput ? String(task.lastTerminalOutput) : null,
+    note: normalizeTaskNote(task.note, task.updatedAt ?? now()),
     createdAt: task.createdAt ?? now(),
     updatedAt: task.updatedAt ?? now(),
   };
@@ -172,6 +192,7 @@ export async function createTask(input) {
     lastStatusAt: timestamp,
     lastTerminalActivityAt: null,
     lastTerminalOutput: null,
+    note: null,
     createdAt: timestamp,
     updatedAt: timestamp,
   });

@@ -41,6 +41,7 @@ let resizeObserver = null;
 let resizeTimer = null;
 let executors = [];
 let tasks = [];
+const noteEditorState = new Map();
 let selectedExecutorId = null;
 const defaultExecutorOutputName = 'project-summary';
 let executorStatusLock = null;
@@ -92,6 +93,55 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function truncateText(value, maxLength = 140) {
+  const normalized = String(value ?? '').trim().replace(/\s+/g, ' ');
+
+  if (!normalized) {
+    return '';
+  }
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function getTaskNoteEditorState(task) {
+  const existing = noteEditorState.get(task.id);
+
+  if (existing) {
+    return existing;
+  }
+
+  const state = {
+    isEditing: false,
+    draft: task.note?.content ?? '',
+    isSaving: false,
+  };
+
+  noteEditorState.set(task.id, state);
+  return state;
+}
+
+function syncTaskNoteEditorState(task) {
+  const state = getTaskNoteEditorState(task);
+
+  if (!state.isEditing) {
+    state.draft = task.note?.content ?? '';
+  }
+
+  return state;
+}
+
+function formatTaskNoteUpdatedAt(note) {
+  return note?.updatedAt ? formatTaskTime(note.updatedAt) : '—';
+}
+
+function summarizeTaskNote(note) {
+  return truncateText(note?.content ?? '', 120);
 }
 
 function summarizeTasks() {
@@ -176,6 +226,13 @@ function renderTasks() {
     const terminalHint = task.linkedSessionId
       ? '当前阶段所有任务共享一个活跃终端；运行新任务会把当前绑定切到这张卡。'
       : '点击运行后，会复用当前唯一活跃终端。';
+    const noteEditor = syncTaskNoteEditorState(task);
+    const hasNote = Boolean(task.note?.content);
+    const noteActionLabel = hasNote ? '编辑备注' : '添加备注';
+    const noteSummary = hasNote
+      ? summarizeTaskNote(task.note)
+      : '添加这张任务卡的上下文、说明或补充记录';
+    const noteUpdatedAt = hasNote ? formatTaskNoteUpdatedAt(task.note) : '暂无备注';
 
     return `
       <article class="task-card" data-task-id="${escapeHtml(task.id)}">
@@ -209,6 +266,35 @@ function renderTasks() {
           </div>
           <span class="hint">${escapeHtml(task.lastRunAt ? `最近运行：${formatTaskTime(task.lastRunAt)}` : '尚未运行。')}</span>
         </div>
+
+        <section class="task-note-card ${noteEditor.isEditing ? 'editing' : ''}" data-note-card>
+          <div class="task-note-header">
+            <div>
+              <span class="label">备注</span>
+              <div class="task-note-updated">${escapeHtml(noteUpdatedAt)}</div>
+            </div>
+            <button class="secondary-button" data-action="toggle-note-editor" data-task-id="${escapeHtml(task.id)}">${escapeHtml(noteActionLabel)}</button>
+          </div>
+
+          ${noteEditor.isEditing ? `
+            <div class="task-note-editor">
+              <textarea
+                class="task-textarea task-note-textarea"
+                data-note-input="${escapeHtml(task.id)}"
+                placeholder="添加这张任务卡的上下文、说明或补充记录"
+                ${noteEditor.isSaving ? 'disabled' : ''}
+              >${escapeHtml(noteEditor.draft)}</textarea>
+              <div class="task-note-actions">
+                <button class="primary-button" data-action="save-note" data-task-id="${escapeHtml(task.id)}" ${noteEditor.isSaving ? 'disabled' : ''}>保存</button>
+                <button class="secondary-button" data-action="cancel-note" data-task-id="${escapeHtml(task.id)}" ${noteEditor.isSaving ? 'disabled' : ''}>取消</button>
+              </div>
+            </div>
+          ` : `
+            <div class="task-note-summary ${hasNote ? '' : 'is-empty'}">
+              ${escapeHtml(noteSummary || '暂无备注')}
+            </div>
+          `}
+        </section>
 
         <div class="task-card-actions">
           <button class="primary-button" data-action="run-task" data-task-id="${escapeHtml(task.id)}" ${canRun ? '' : 'disabled'}>运行</button>
@@ -339,6 +425,79 @@ async function createTaskCard() {
     appendLog(`创建任务失败：${error.message}`, 'warn');
   } finally {
     createTaskButton.disabled = false;
+  }
+}
+
+function openTaskNoteEditor(taskId) {
+  const task = tasks.find((item) => item.id === taskId);
+
+  if (!task) {
+    return;
+  }
+
+  const state = getTaskNoteEditorState(task);
+  state.isEditing = true;
+  state.isSaving = false;
+  state.draft = task.note?.content ?? '';
+  renderTasks();
+
+  window.requestAnimationFrame(() => {
+    taskList?.querySelector(`[data-note-input="${taskId}"]`)?.focus();
+  });
+}
+
+function cancelTaskNoteEditor(taskId) {
+  const task = tasks.find((item) => item.id === taskId);
+
+  if (!task) {
+    return;
+  }
+
+  const state = getTaskNoteEditorState(task);
+  state.isEditing = false;
+  state.isSaving = false;
+  state.draft = task.note?.content ?? '';
+  renderTasks();
+}
+
+async function saveTaskNote(taskId) {
+  const task = tasks.find((item) => item.id === taskId);
+
+  if (!task) {
+    appendLog('未找到对应任务卡。', 'warn');
+    return;
+  }
+
+  const state = getTaskNoteEditorState(task);
+  state.isSaving = true;
+  renderTasks();
+
+  try {
+    const response = await fetch('/api/tasks/note', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        taskId,
+        content: state.draft,
+      }),
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? '保存备注失败');
+    }
+
+    state.isEditing = false;
+    state.isSaving = false;
+    state.draft = payload.task?.note?.content ?? '';
+    upsertTask(payload.task);
+    appendLog(`任务卡“${payload.task.title}”备注已保存。`, 'success');
+  } catch (error) {
+    state.isSaving = false;
+    renderTasks();
+    appendLog(`保存备注失败：${error.message}`, 'warn');
   }
 }
 
@@ -947,6 +1106,23 @@ taskForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   await createTaskCard();
 });
+taskList?.addEventListener('input', (event) => {
+  const input = event.target.closest('textarea[data-note-input]');
+
+  if (!input) {
+    return;
+  }
+
+  const taskId = input.dataset.noteInput;
+  const task = tasks.find((item) => item.id === taskId);
+
+  if (!task) {
+    return;
+  }
+
+  const state = getTaskNoteEditorState(task);
+  state.draft = input.value;
+});
 taskList?.addEventListener('click', async (event) => {
   const actionButton = event.target.closest('button[data-action]');
 
@@ -965,6 +1141,21 @@ taskList?.addEventListener('click', async (event) => {
   if (action === 'focus-terminal') {
     const task = tasks.find((item) => item.id === taskId) ?? null;
     focusTerminalPanel(task);
+    return;
+  }
+
+  if (action === 'toggle-note-editor') {
+    openTaskNoteEditor(taskId);
+    return;
+  }
+
+  if (action === 'cancel-note') {
+    cancelTaskNoteEditor(taskId);
+    return;
+  }
+
+  if (action === 'save-note') {
+    await saveTaskNote(taskId);
   }
 });
 selectProjectButton.addEventListener('click', selectProject);
