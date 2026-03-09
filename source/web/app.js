@@ -49,6 +49,13 @@ let lastKnownTerminalSize = {
   rows: null,
 };
 
+const TASK_STATUS_LABELS = {
+  idle: '未运行',
+  running: '运行中',
+  waiting: '等待处理',
+  ended: '已结束',
+};
+
 function normalizeExecutorOutputName(value) {
   const normalized = String(value ?? '')
     .trim()
@@ -61,14 +68,7 @@ function normalizeExecutorOutputName(value) {
 }
 
 function formatTaskStatus(status) {
-  const labels = {
-    idle: '未运行',
-    running: '运行中',
-    waiting: '等待处理',
-    ended: '已结束',
-  };
-
-  return labels[status] ?? '未运行';
+  return TASK_STATUS_LABELS[status] ?? TASK_STATUS_LABELS.idle;
 }
 
 function formatTaskTime(value) {
@@ -283,6 +283,17 @@ async function loadTasks() {
     appendLog(`读取任务列表失败：${error.message}`, 'warn');
     tasks = [];
     renderTasks();
+  }
+}
+
+async function refreshTasksSilently() {
+  try {
+    const response = await fetch('/api/tasks', { cache: 'no-store' });
+    const payload = await response.json();
+    tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+    renderTasks();
+  } catch {
+    // ignore silent refresh failures from terminal event sync
   }
 }
 
@@ -526,17 +537,6 @@ function renderSession(session) {
     terminalSession.textContent = '未创建';
     terminalSession.className = '';
     terminalSize.textContent = '-- x --';
-    tasks = tasks.map((task) => {
-      if (task.status === 'running') {
-        return {
-          ...task,
-          status: 'ended',
-        };
-      }
-
-      return task;
-    });
-    renderTasks();
     updateExecutorControls();
     return;
   }
@@ -707,26 +707,12 @@ function connectTerminal(mode = 'connect') {
     }));
   });
 
-  socket.addEventListener('message', (event) => {
+  socket.addEventListener('message', async (event) => {
     const payload = JSON.parse(event.data);
 
     if (payload.type === 'session') {
       renderSession(payload.session);
-
-      if (payload.session?.id) {
-        tasks = tasks.map((task) => {
-          if (task.linkedSessionId === payload.session.id) {
-            return {
-              ...task,
-              status: payload.session.status === 'running' ? 'running' : 'ended',
-              updatedAt: new Date().toISOString(),
-            };
-          }
-
-          return task;
-        });
-        renderTasks();
-      }
+      await refreshTasksSilently();
 
       if (payload.recentOutput) {
         terminal.write(payload.recentOutput);
@@ -737,48 +723,14 @@ function connectTerminal(mode = 'connect') {
 
     if (payload.type === 'output') {
       terminal.write(payload.data);
-      const sessionId = currentSession?.id;
-      const lower = String(payload.data ?? '').toLowerCase();
-      const inferredStatus = ['press any key', 'continue?', 'password', 'confirm', '[y/n]', '(y/n)', 'waiting for input', 'permission', 'allow']
-        .some((keyword) => lower.includes(keyword))
-        ? 'waiting'
-        : 'running';
-
-      if (sessionId) {
-        tasks = tasks.map((task) => {
-          if (task.linkedSessionId === sessionId) {
-            return {
-              ...task,
-              status: inferredStatus,
-              updatedAt: new Date().toISOString(),
-            };
-          }
-
-          return task;
-        });
-        renderTasks();
-      }
+      await refreshTasksSilently();
       return;
     }
 
     if (payload.type === 'exit') {
       renderSession(payload.session ?? null);
+      await refreshTasksSilently();
       appendLog(`终端已退出，exitCode=${payload.exitCode ?? 'null'}`, 'warn');
-      const sessionId = currentSession?.id ?? payload.session?.id;
-      if (sessionId) {
-        tasks = tasks.map((task) => {
-          if (task.linkedSessionId === sessionId) {
-            return {
-              ...task,
-              status: 'ended',
-              updatedAt: new Date().toISOString(),
-            };
-          }
-
-          return task;
-        });
-        renderTasks();
-      }
       terminal.writeln('');
       terminal.writeln('[Terminal exited]');
       return;

@@ -4,6 +4,8 @@ import crypto from 'node:crypto';
 
 const dataDir = path.resolve(process.cwd(), 'source/server/data');
 const stateFilePath = path.join(dataDir, 'project-state.json');
+const TASK_STATUSES = new Set(['idle', 'running', 'waiting', 'ended']);
+let writeQueue = Promise.resolve();
 
 function now() {
   return new Date().toISOString();
@@ -29,8 +31,7 @@ function createDefaultState() {
 }
 
 function normalizeTaskStatus(status) {
-  const allowed = new Set(['idle', 'running', 'waiting', 'ended']);
-  return allowed.has(status) ? status : 'idle';
+  return TASK_STATUSES.has(status) ? status : 'idle';
 }
 
 function mapTask(task) {
@@ -56,9 +57,15 @@ function mapTask(task) {
 
 async function readState() {
   await ensureStore();
+  await writeQueue;
 
   try {
     const raw = await fs.readFile(stateFilePath, 'utf8');
+
+    if (!raw.trim()) {
+      return createDefaultState();
+    }
+
     const parsed = JSON.parse(raw);
 
     return {
@@ -78,6 +85,10 @@ async function readState() {
       return createDefaultState();
     }
 
+    if (error instanceof SyntaxError) {
+      return createDefaultState();
+    }
+
     throw error;
   }
 }
@@ -85,7 +96,29 @@ async function readState() {
 async function writeState(state) {
   await ensureStore();
   const payload = JSON.stringify(state, null, 2);
-  await fs.writeFile(stateFilePath, payload, 'utf8');
+
+  writeQueue = writeQueue
+    .catch(() => {})
+    .then(() => fs.writeFile(stateFilePath, payload, 'utf8'));
+
+  await writeQueue;
+}
+
+function buildTaskPatch(currentTask, patch) {
+  const nextTask = mapTask({
+    ...currentTask,
+    ...patch,
+    id: currentTask.id,
+    createdAt: currentTask.createdAt,
+    updatedAt: now(),
+    status: patch?.status ? normalizeTaskStatus(patch.status) : currentTask.status,
+  });
+
+  return nextTask;
+}
+
+function areTasksEqual(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 export async function ensureStore() {
@@ -162,14 +195,11 @@ export async function updateTask(taskId, patch) {
   }
 
   const currentTask = state.tasks[index];
-  const nextTask = mapTask({
-    ...currentTask,
-    ...patch,
-    id: currentTask.id,
-    createdAt: currentTask.createdAt,
-    updatedAt: now(),
-    status: patch?.status ? normalizeTaskStatus(patch.status) : currentTask.status,
-  });
+  const nextTask = buildTaskPatch(currentTask, patch);
+
+  if (areTasksEqual(currentTask, nextTask)) {
+    return currentTask;
+  }
 
   state.tasks[index] = nextTask;
   await writeState(state);

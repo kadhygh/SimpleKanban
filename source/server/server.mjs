@@ -17,6 +17,10 @@ const nodeModulesRoot = path.resolve(process.cwd(), 'node_modules');
 const terminalSessionManager = createTerminalSessionManager();
 let activeTaskSessionLink = null;
 
+function now() {
+  return new Date().toISOString();
+}
+
 function mapTaskStatusFromSessionStatus(sessionStatus) {
   if (sessionStatus === 'running' || sessionStatus === 'starting') {
     return 'running';
@@ -62,26 +66,30 @@ async function syncLinkedTaskWithSession(session, extras = {}) {
     return null;
   }
 
-  const patch = {
-    linkedSessionId: session?.id ?? activeTaskSessionLink.sessionId ?? task.linkedSessionId ?? null,
-    lastStatusAt: new Date().toISOString(),
-  };
+  const nextStatus = extras.status ?? (session?.status ? mapTaskStatusFromSessionStatus(session.status) : task.status);
+  const nextSessionId = session?.id ?? activeTaskSessionLink.sessionId ?? task.linkedSessionId ?? null;
+  const nextActivityAt = extras.lastTerminalActivityAt ?? task.lastTerminalActivityAt;
+  const nextOutput = extras.lastTerminalOutput ?? task.lastTerminalOutput;
 
-  if (extras.lastTerminalActivityAt) {
-    patch.lastTerminalActivityAt = extras.lastTerminalActivityAt;
+  if (
+    task.status === nextStatus
+    && task.linkedSessionId === nextSessionId
+    && task.lastTerminalActivityAt === nextActivityAt
+    && task.lastTerminalOutput === nextOutput
+  ) {
+    if (!session || session.status === 'closed' || session.status === 'error') {
+      activeTaskSessionLink = null;
+    }
+    return task;
   }
 
-  if (extras.lastTerminalOutput) {
-    patch.lastTerminalOutput = extras.lastTerminalOutput;
-  }
-
-  if (extras.status) {
-    patch.status = extras.status;
-  } else if (session?.status) {
-    patch.status = mapTaskStatusFromSessionStatus(session.status);
-  }
-
-  const updatedTask = await updateTask(task.id, patch);
+  const updatedTask = await updateTask(task.id, {
+    status: nextStatus,
+    linkedSessionId: nextSessionId,
+    lastStatusAt: now(),
+    lastTerminalActivityAt: nextActivityAt,
+    lastTerminalOutput: nextOutput,
+  });
 
   if (!session || session.status === 'closed' || session.status === 'error') {
     activeTaskSessionLink = null;
@@ -107,7 +115,7 @@ terminalSessionManager.subscribe((event) => {
     const status = detectTaskWaitingState(event.data) ? 'waiting' : undefined;
     syncLinkedTaskWithSession(terminalSessionManager.getSnapshot(), {
       status,
-      lastTerminalActivityAt: event.at ?? new Date().toISOString(),
+      lastTerminalActivityAt: event.at ?? now(),
       lastTerminalOutput: String(event.data ?? '').slice(-500),
     }).catch((error) => {
       console.error('Failed to sync task output state.', error);
@@ -321,8 +329,8 @@ async function handleTaskRun(request, response) {
     const updatedTask = await updateTask(task.id, {
       status: 'running',
       linkedSessionId: session.id,
-      lastRunAt: new Date().toISOString(),
-      lastStatusAt: new Date().toISOString(),
+      lastRunAt: now(),
+      lastStatusAt: now(),
       lastTerminalActivityAt: session.lastOutputAt ?? null,
     });
 
