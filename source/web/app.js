@@ -20,6 +20,14 @@ const executorDescription = document.querySelector('#executor-description');
 const executorCommand = document.querySelector('#executor-command');
 const refreshExecutorsButton = document.querySelector('#refresh-executors');
 const runExecutorButton = document.querySelector('#run-executor');
+const toggleTaskFormButton = document.querySelector('#toggle-task-form');
+const taskForm = document.querySelector('#task-form');
+const taskTitleInput = document.querySelector('#task-title');
+const taskDescriptionInput = document.querySelector('#task-description');
+const taskExecutorSelect = document.querySelector('#task-executor-select');
+const taskList = document.querySelector('#task-list');
+const tasksSummary = document.querySelector('#tasks-summary');
+const createTaskButton = document.querySelector('#create-task');
 
 const { Terminal } = window;
 const FitAddonCtor = window.FitAddon?.FitAddon;
@@ -32,6 +40,7 @@ let socket = null;
 let resizeObserver = null;
 let resizeTimer = null;
 let executors = [];
+let tasks = [];
 let selectedExecutorId = null;
 const defaultExecutorOutputName = 'project-summary';
 let executorStatusLock = null;
@@ -49,6 +58,343 @@ function normalizeExecutorOutputName(value) {
     .replace(/^-|-$/g, '');
 
   return normalized || defaultExecutorOutputName;
+}
+
+function formatTaskStatus(status) {
+  const labels = {
+    idle: '未运行',
+    running: '运行中',
+    waiting: '等待处理',
+    ended: '已结束',
+  };
+
+  return labels[status] ?? '未运行';
+}
+
+function formatTaskTime(value) {
+  if (!value) {
+    return '—';
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return '—';
+  }
+
+  return date.toLocaleString();
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function summarizeTasks() {
+  const counts = {
+    total: tasks.length,
+    idle: 0,
+    running: 0,
+    waiting: 0,
+    ended: 0,
+  };
+
+  for (const task of tasks) {
+    if (counts[task.status] != null) {
+      counts[task.status] += 1;
+    }
+  }
+
+  return counts;
+}
+
+function syncTaskExecutorOptions() {
+  if (!taskExecutorSelect) {
+    return;
+  }
+
+  taskExecutorSelect.innerHTML = '';
+
+  if (executors.length === 0) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = '暂无可用执行器';
+    taskExecutorSelect.append(option);
+    taskExecutorSelect.disabled = true;
+    return;
+  }
+
+  for (const executor of executors) {
+    const option = document.createElement('option');
+    option.value = executor.id;
+    option.textContent = executor.name;
+    taskExecutorSelect.append(option);
+  }
+
+  if (!executors.some((executor) => executor.id === taskExecutorSelect.value)) {
+    taskExecutorSelect.value = executors[0].id;
+  }
+
+  taskExecutorSelect.disabled = !currentProject?.path;
+}
+
+function renderTasks() {
+  if (!taskList || !tasksSummary) {
+    return;
+  }
+
+  const summary = summarizeTasks();
+  tasksSummary.innerHTML = [
+    { label: '任务总数', value: summary.total },
+    { label: '未运行', value: summary.idle },
+    { label: '运行中', value: summary.running },
+    { label: '等待处理', value: summary.waiting },
+    { label: '已结束', value: summary.ended },
+  ].map((item) => `
+    <div class="summary-chip">
+      <span class="label">${item.label}</span>
+      <strong>${item.value}</strong>
+    </div>
+  `).join('');
+
+  if (tasks.length === 0) {
+    taskList.innerHTML = '<div class="task-empty">还没有任务卡。先创建一个最小 TaskCard，再从卡片直接启动执行。</div>';
+    return;
+  }
+
+  taskList.innerHTML = tasks.map((task) => {
+    const executorName = executors.find((executor) => executor.id === task.executorId)?.name ?? task.executorId ?? '未绑定';
+    const sessionShortId = task.linkedSessionId ? task.linkedSessionId.slice(0, 8) : '—';
+    const canRun = Boolean(currentProject?.path && task.executorId);
+    const terminalBindingText = task.linkedSessionId
+      ? `共享终端 · ${sessionShortId}`
+      : '尚未绑定共享终端';
+    const terminalHint = task.linkedSessionId
+      ? '当前阶段所有任务共享一个活跃终端；运行新任务会把当前绑定切到这张卡。'
+      : '点击运行后，会复用当前唯一活跃终端。';
+
+    return `
+      <article class="task-card" data-task-id="${escapeHtml(task.id)}">
+        <div class="task-card-header">
+          <div class="task-card-title">${escapeHtml(task.title)}</div>
+          <p class="task-card-description">${escapeHtml(task.description || '暂无描述。')}</p>
+        </div>
+
+        <div class="task-card-meta">
+          <div class="task-meta-grid">
+            <div>
+              <span class="label">执行器</span>
+              <div>${escapeHtml(executorName)}</div>
+            </div>
+            <div>
+              <span class="label">终端绑定</span>
+              <div>${escapeHtml(terminalBindingText)}</div>
+            </div>
+            <div>
+              <span class="label">最近更新</span>
+              <div>${escapeHtml(formatTaskTime(task.updatedAt))}</div>
+            </div>
+          </div>
+          <span class="hint">${escapeHtml(terminalHint)}</span>
+        </div>
+
+        <div class="task-card-status">
+          <div class="task-status-row">
+            <span class="status-dot ${escapeHtml(task.status)}"></span>
+            <strong>${escapeHtml(formatTaskStatus(task.status))}</strong>
+          </div>
+          <span class="hint">${escapeHtml(task.lastRunAt ? `最近运行：${formatTaskTime(task.lastRunAt)}` : '尚未运行。')}</span>
+        </div>
+
+        <div class="task-card-actions">
+          <button class="primary-button" data-action="run-task" data-task-id="${escapeHtml(task.id)}" ${canRun ? '' : 'disabled'}>运行</button>
+          <button class="secondary-button" data-action="focus-terminal" data-task-id="${escapeHtml(task.id)}">查看终端</button>
+        </div>
+      </article>
+    `;
+  }).join('');
+}
+
+function toggleTaskForm(forceOpen) {
+  if (!taskForm) {
+    return;
+  }
+
+  const shouldOpen = typeof forceOpen === 'boolean' ? forceOpen : taskForm.hidden;
+  taskForm.hidden = !shouldOpen;
+
+  if (toggleTaskFormButton) {
+    toggleTaskFormButton.textContent = shouldOpen ? '收起表单' : '新建任务';
+  }
+
+  if (shouldOpen) {
+    taskTitleInput?.focus();
+  }
+}
+
+function focusTerminalPanel(task) {
+  terminalPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  terminal?.focus();
+
+  if (task?.title) {
+    appendLog(`已定位到共享终端，可继续处理任务“${task.title}”。`);
+  }
+}
+
+function getCurrentTerminalSize() {
+  return {
+    cols: terminal?.cols ?? lastKnownTerminalSize.cols ?? 120,
+    rows: terminal?.rows ?? lastKnownTerminalSize.rows ?? 32,
+  };
+}
+
+function getTaskRunParams(task) {
+  if (task?.executorId === 'project-summary-doc') {
+    return getExecutorParams();
+  }
+
+  return {};
+}
+
+function upsertTask(nextTask) {
+  const index = tasks.findIndex((task) => task.id === nextTask.id);
+
+  if (index === -1) {
+    tasks = [nextTask, ...tasks];
+  } else {
+    tasks[index] = nextTask;
+    tasks = [...tasks];
+  }
+
+  renderTasks();
+}
+
+async function loadTasks() {
+  try {
+    const response = await fetch('/api/tasks', { cache: 'no-store' });
+    const payload = await response.json();
+    tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+    renderTasks();
+  } catch (error) {
+    appendLog(`读取任务列表失败：${error.message}`, 'warn');
+    tasks = [];
+    renderTasks();
+  }
+}
+
+async function createTaskCard() {
+  const title = taskTitleInput?.value?.trim() ?? '';
+  const description = taskDescriptionInput?.value?.trim() ?? '';
+  const executorId = taskExecutorSelect?.value?.trim() ?? '';
+
+  if (!title) {
+    appendLog('请先输入任务标题。', 'warn');
+    taskTitleInput?.focus();
+    return;
+  }
+
+  if (!executorId) {
+    appendLog('请先为任务选择执行器。', 'warn');
+    taskExecutorSelect?.focus();
+    return;
+  }
+
+  createTaskButton.disabled = true;
+
+  try {
+    const response = await fetch('/api/tasks', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title, description, executorId }),
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? '创建任务失败');
+    }
+
+    upsertTask(payload.task);
+    taskForm.reset();
+    syncTaskExecutorOptions();
+    toggleTaskForm(false);
+    appendLog(`已创建任务卡：${payload.task.title}`, 'success');
+  } catch (error) {
+    appendLog(`创建任务失败：${error.message}`, 'warn');
+  } finally {
+    createTaskButton.disabled = false;
+  }
+}
+
+async function runTask(taskId) {
+  const task = tasks.find((item) => item.id === taskId);
+
+  if (!task) {
+    appendLog('未找到对应任务卡。', 'warn');
+    return;
+  }
+
+  if (!currentProject?.path) {
+    appendLog('请先选择工程目录，再运行任务卡。', 'warn');
+    return;
+  }
+
+  try {
+    ensureTerminal();
+  } catch (error) {
+    appendLog(`初始化终端失败：${error.message}`, 'warn');
+    return;
+  }
+
+  if (socket?.readyState !== WebSocket.OPEN) {
+    connectTerminal('connect');
+  }
+
+  const button = taskList.querySelector(`[data-action="run-task"][data-task-id="${taskId}"]`);
+  if (button) {
+    button.disabled = true;
+  }
+
+  try {
+    const response = await fetch('/api/tasks/run', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        taskId,
+        params: getTaskRunParams(task),
+        ...getCurrentTerminalSize(),
+      }),
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? '任务运行失败');
+    }
+
+    if (payload.session) {
+      renderSession(payload.session);
+    }
+
+    if (payload.task) {
+      upsertTask(payload.task);
+    }
+
+    appendLog(`任务卡“${task.title}”已注入终端。`, 'success');
+    focusTerminalPanel(task);
+  } catch (error) {
+    appendLog(`任务运行失败：${error.message}`, 'warn');
+  } finally {
+    if (button) {
+      button.disabled = false;
+    }
+  }
 }
 
 function getExecutorParams() {
@@ -151,6 +497,11 @@ function renderProject(project) {
     projectName.textContent = '点击“选择工程”后，服务会保存当前项目路径。';
     openTerminalButton.disabled = true;
     reconnectTerminalButton.disabled = true;
+    syncTaskExecutorOptions();
+    if (createTaskButton) {
+      createTaskButton.disabled = true;
+    }
+    renderTasks();
     updateExecutorControls();
     return;
   }
@@ -159,6 +510,11 @@ function renderProject(project) {
   projectName.textContent = `项目名称：${project.name}`;
   openTerminalButton.disabled = false;
   reconnectTerminalButton.disabled = false;
+  syncTaskExecutorOptions();
+  if (createTaskButton) {
+    createTaskButton.disabled = executors.length === 0;
+  }
+  renderTasks();
   updateExecutorControls();
 }
 
@@ -170,6 +526,17 @@ function renderSession(session) {
     terminalSession.textContent = '未创建';
     terminalSession.className = '';
     terminalSize.textContent = '-- x --';
+    tasks = tasks.map((task) => {
+      if (task.status === 'running') {
+        return {
+          ...task,
+          status: 'ended',
+        };
+      }
+
+      return task;
+    });
+    renderTasks();
     updateExecutorControls();
     return;
   }
@@ -196,6 +563,10 @@ function renderExecutors() {
     selectedExecutorId = null;
     executorDescription.textContent = currentProject?.path ? '当前项目下还没有可用执行器。' : '请先选择工程目录。';
     executorCommand.textContent = '等待加载命令预览。';
+    syncTaskExecutorOptions();
+    if (createTaskButton) {
+      createTaskButton.disabled = true;
+    }
     updateExecutorControls();
     return;
   }
@@ -215,6 +586,11 @@ function renderExecutors() {
   const selectedExecutor = getSelectedExecutor();
   executorDescription.textContent = selectedExecutor?.description ?? '当前执行器未提供简介。';
   executorCommand.textContent = getExecutorPreview(selectedExecutor);
+  syncTaskExecutorOptions();
+  if (createTaskButton) {
+    createTaskButton.disabled = !currentProject?.path;
+  }
+  renderTasks();
   updateExecutorControls();
 }
 
@@ -337,6 +713,21 @@ function connectTerminal(mode = 'connect') {
     if (payload.type === 'session') {
       renderSession(payload.session);
 
+      if (payload.session?.id) {
+        tasks = tasks.map((task) => {
+          if (task.linkedSessionId === payload.session.id) {
+            return {
+              ...task,
+              status: payload.session.status === 'running' ? 'running' : 'ended',
+              updatedAt: new Date().toISOString(),
+            };
+          }
+
+          return task;
+        });
+        renderTasks();
+      }
+
       if (payload.recentOutput) {
         terminal.write(payload.recentOutput);
       }
@@ -346,12 +737,48 @@ function connectTerminal(mode = 'connect') {
 
     if (payload.type === 'output') {
       terminal.write(payload.data);
+      const sessionId = currentSession?.id;
+      const lower = String(payload.data ?? '').toLowerCase();
+      const inferredStatus = ['press any key', 'continue?', 'password', 'confirm', '[y/n]', '(y/n)', 'waiting for input', 'permission', 'allow']
+        .some((keyword) => lower.includes(keyword))
+        ? 'waiting'
+        : 'running';
+
+      if (sessionId) {
+        tasks = tasks.map((task) => {
+          if (task.linkedSessionId === sessionId) {
+            return {
+              ...task,
+              status: inferredStatus,
+              updatedAt: new Date().toISOString(),
+            };
+          }
+
+          return task;
+        });
+        renderTasks();
+      }
       return;
     }
 
     if (payload.type === 'exit') {
       renderSession(payload.session ?? null);
       appendLog(`终端已退出，exitCode=${payload.exitCode ?? 'null'}`, 'warn');
+      const sessionId = currentSession?.id ?? payload.session?.id;
+      if (sessionId) {
+        tasks = tasks.map((task) => {
+          if (task.linkedSessionId === sessionId) {
+            return {
+              ...task,
+              status: 'ended',
+              updatedAt: new Date().toISOString(),
+            };
+          }
+
+          return task;
+        });
+        renderTasks();
+      }
       terminal.writeln('');
       terminal.writeln('[Terminal exited]');
       return;
@@ -561,6 +988,33 @@ executorOutputName.addEventListener('input', () => {
   setExecutorStatus('参数已更新', 'success', `当前预期输出文件为 docs/${normalized}.md。`);
   updateExecutorControls();
 });
+toggleTaskFormButton?.addEventListener('click', () => {
+  toggleTaskForm();
+});
+taskForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  await createTaskCard();
+});
+taskList?.addEventListener('click', async (event) => {
+  const actionButton = event.target.closest('button[data-action]');
+
+  if (!actionButton) {
+    return;
+  }
+
+  const taskId = actionButton.dataset.taskId;
+  const action = actionButton.dataset.action;
+
+  if (action === 'run-task') {
+    await runTask(taskId);
+    return;
+  }
+
+  if (action === 'focus-terminal') {
+    const task = tasks.find((item) => item.id === taskId) ?? null;
+    focusTerminalPanel(task);
+  }
+});
 selectProjectButton.addEventListener('click', selectProject);
 refreshProjectButton.addEventListener('click', async () => {
   await loadCurrentProject();
@@ -580,10 +1034,12 @@ reconnectTerminalButton.addEventListener('click', () => {
 renderProject(null);
 renderSession(null);
 renderExecutors();
+renderTasks();
 setTerminalConnectionState('未连接');
 
 await loadHealth();
 await loadCurrentProject();
 await loadExecutors();
+await loadTasks();
 const initialSession = await loadTerminalSession();
 tryRestoreRunningSession(initialSession);

@@ -6,7 +6,7 @@ import { URL } from 'node:url';
 import WebSocket, { WebSocketServer } from 'ws';
 
 import { buildExecutorCommand, listExecutorProfiles, normalizeExecutorParams } from './lib/executor-profiles.mjs';
-import { readCurrentProject, saveCurrentProject } from './lib/project-store.mjs';
+import { readCurrentProject, saveCurrentProject, listTasks, createTask, getTask, updateTask } from './lib/project-store.mjs';
 import { ensureDirectoryPath, selectProjectFolder } from './lib/folder-dialog.mjs';
 import { createTerminalSessionManager } from './lib/terminal-session-manager.mjs';
 
@@ -15,6 +15,105 @@ const port = Number(process.env.PORT ?? 3210);
 const webRoot = path.resolve(process.cwd(), 'source/web');
 const nodeModulesRoot = path.resolve(process.cwd(), 'node_modules');
 const terminalSessionManager = createTerminalSessionManager();
+let activeTaskSessionLink = null;
+
+function mapTaskStatusFromSessionStatus(sessionStatus) {
+  if (sessionStatus === 'running' || sessionStatus === 'starting') {
+    return 'running';
+  }
+
+  if (sessionStatus === 'closed' || sessionStatus === 'error') {
+    return 'ended';
+  }
+
+  return 'idle';
+}
+
+function detectTaskWaitingState(output) {
+  const text = String(output ?? '').toLowerCase();
+
+  if (!text.trim()) {
+    return false;
+  }
+
+  return [
+    'press any key',
+    'continue?',
+    'password',
+    'confirm',
+    '[y/n]',
+    '(y/n)',
+    'waiting for input',
+    'input required',
+    'permission',
+    'allow',
+  ].some((keyword) => text.includes(keyword));
+}
+
+async function syncLinkedTaskWithSession(session, extras = {}) {
+  if (!activeTaskSessionLink?.taskId) {
+    return null;
+  }
+
+  const task = await getTask(activeTaskSessionLink.taskId);
+
+  if (!task) {
+    activeTaskSessionLink = null;
+    return null;
+  }
+
+  const patch = {
+    linkedSessionId: session?.id ?? activeTaskSessionLink.sessionId ?? task.linkedSessionId ?? null,
+    lastStatusAt: new Date().toISOString(),
+  };
+
+  if (extras.lastTerminalActivityAt) {
+    patch.lastTerminalActivityAt = extras.lastTerminalActivityAt;
+  }
+
+  if (extras.lastTerminalOutput) {
+    patch.lastTerminalOutput = extras.lastTerminalOutput;
+  }
+
+  if (extras.status) {
+    patch.status = extras.status;
+  } else if (session?.status) {
+    patch.status = mapTaskStatusFromSessionStatus(session.status);
+  }
+
+  const updatedTask = await updateTask(task.id, patch);
+
+  if (!session || session.status === 'closed' || session.status === 'error') {
+    activeTaskSessionLink = null;
+  } else if (updatedTask) {
+    activeTaskSessionLink = {
+      taskId: updatedTask.id,
+      sessionId: updatedTask.linkedSessionId,
+    };
+  }
+
+  return updatedTask;
+}
+
+terminalSessionManager.subscribe((event) => {
+  if (event.type === 'session') {
+    syncLinkedTaskWithSession(event.session).catch((error) => {
+      console.error('Failed to sync task session state.', error);
+    });
+    return;
+  }
+
+  if (event.type === 'output') {
+    const status = detectTaskWaitingState(event.data) ? 'waiting' : undefined;
+    syncLinkedTaskWithSession(terminalSessionManager.getSnapshot(), {
+      status,
+      lastTerminalActivityAt: event.at ?? new Date().toISOString(),
+      lastTerminalOutput: String(event.data ?? '').slice(-500),
+    }).catch((error) => {
+      console.error('Failed to sync task output state.', error);
+    });
+  }
+}, { replay: false });
 
 const vendorFiles = {
   '/vendor/xterm.css': path.join(nodeModulesRoot, '@xterm/xterm/css/xterm.css'),
@@ -168,6 +267,79 @@ async function handleTerminalClose(response) {
   sendJson(response, 200, { session });
 }
 
+async function handleTaskList(response) {
+  const tasks = await listTasks();
+  sendJson(response, 200, { tasks });
+}
+
+async function handleTaskCreate(request, response) {
+  try {
+    const body = await readBody(request);
+    const task = await createTask({
+      title: body.title,
+      description: body.description,
+      executorId: body.executorId,
+    });
+    sendJson(response, 201, { task });
+  } catch (error) {
+    const statusCode = /required/i.test(error.message) ? 400 : 500;
+    sendJson(response, statusCode, { error: error.message || 'Failed to create task.' });
+  }
+}
+
+async function handleTaskRun(request, response) {
+  try {
+    const body = await readBody(request);
+    const taskId = String(body.taskId ?? '').trim();
+
+    if (!taskId) {
+      sendJson(response, 400, { error: 'taskId is required.' });
+      return;
+    }
+
+    const task = await getTask(taskId);
+
+    if (!task) {
+      sendJson(response, 404, { error: 'Task not found.' });
+      return;
+    }
+
+    const project = await ensureCurrentProject();
+    const params = normalizeExecutorParams(task.executorId, body.params ?? {});
+    const command = buildExecutorCommand(task.executorId, params);
+    const session = terminalSessionManager.ensureActiveSession({
+      projectPath: project.path,
+      cols: body.cols,
+      rows: body.rows,
+    });
+
+    activeTaskSessionLink = {
+      taskId: task.id,
+      sessionId: session.id,
+    };
+
+    const updatedTask = await updateTask(task.id, {
+      status: 'running',
+      linkedSessionId: session.id,
+      lastRunAt: new Date().toISOString(),
+      lastStatusAt: new Date().toISOString(),
+      lastTerminalActivityAt: session.lastOutputAt ?? null,
+    });
+
+    terminalSessionManager.write(`${command}\r`);
+
+    sendJson(response, 200, {
+      task: updatedTask,
+      session: terminalSessionManager.getSnapshot(),
+      command,
+      params,
+    });
+  } catch (error) {
+    console.error(error);
+    sendJson(response, 500, { error: error.message || 'Failed to run task.' });
+  }
+}
+
 async function handleExecutorList(response) {
   sendJson(response, 200, {
     executors: listExecutorProfiles(),
@@ -304,6 +476,21 @@ async function requestHandler(request, response) {
 
   if (request.method === 'POST' && requestUrl.pathname === '/api/project/select') {
     await handleProjectSelect(request, response);
+    return;
+  }
+
+  if (request.method === 'GET' && requestUrl.pathname === '/api/tasks') {
+    await handleTaskList(response);
+    return;
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/tasks') {
+    await handleTaskCreate(request, response);
+    return;
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/tasks/run') {
+    await handleTaskRun(request, response);
     return;
   }
 
