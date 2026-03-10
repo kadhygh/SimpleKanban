@@ -54,6 +54,7 @@ let lastKnownTerminalSize = {
 };
 let structureFilterMode = 'all';
 const structureRowState = new Map();
+let structureSelectedTaskId = null;
 
 const TASK_STATUS_LABELS = {
   idle: '未运行',
@@ -283,7 +284,83 @@ function renderTaskIdChips(ids, titleById, { muted = false } = {}) {
   }).join('');
 }
 
-function renderStructureView(depIndex) {
+function detectCycleTaskIds(depIndex) {
+  const indexById = new Map();
+  const lowById = new Map();
+  const onStack = new Set();
+  const stack = [];
+  const inCycle = new Set();
+  let nextIndex = 0;
+
+  function strongConnect(taskId) {
+    indexById.set(taskId, nextIndex);
+    lowById.set(taskId, nextIndex);
+    nextIndex += 1;
+
+    stack.push(taskId);
+    onStack.add(taskId);
+
+    const deps = depIndex.depIdsByOwnerId.get(taskId) ?? [];
+
+    for (const depId of deps) {
+      if (!depIndex.byId.has(depId)) {
+        continue;
+      }
+
+      if (!indexById.has(depId)) {
+        strongConnect(depId);
+        lowById.set(taskId, Math.min(lowById.get(taskId), lowById.get(depId)));
+        continue;
+      }
+
+      if (onStack.has(depId)) {
+        lowById.set(taskId, Math.min(lowById.get(taskId), indexById.get(depId)));
+      }
+    }
+
+    if (lowById.get(taskId) !== indexById.get(taskId)) {
+      return;
+    }
+
+    const scc = [];
+
+    while (stack.length > 0) {
+      const top = stack.pop();
+      onStack.delete(top);
+      scc.push(top);
+
+      if (top === taskId) {
+        break;
+      }
+    }
+
+    if (scc.length > 1) {
+      for (const id of scc) {
+        inCycle.add(id);
+      }
+      return;
+    }
+
+    const only = scc[0];
+    const onlyDeps = depIndex.depIdsByOwnerId.get(only) ?? [];
+
+    if (onlyDeps.includes(only)) {
+      inCycle.add(only);
+    }
+  }
+
+  for (const taskId of depIndex.byId.keys()) {
+    if (indexById.has(taskId)) {
+      continue;
+    }
+
+    strongConnect(taskId);
+  }
+
+  return inCycle;
+}
+
+function renderStructureView(depIndex, { cycleTaskIds } = {}) {
   if (!structureList) {
     return;
   }
@@ -294,6 +371,13 @@ function renderStructureView(depIndex) {
   }
 
   const titleById = new Map(tasks.map((task) => [task.id, getTaskDisplayName(task)]));
+  const selectedTask = structureSelectedTaskId ? depIndex.byId.get(structureSelectedTaskId) : null;
+  const selectedDepIds = selectedTask
+    ? new Set(depIndex.depIdsByOwnerId.get(selectedTask.id) ?? [])
+    : new Set();
+  const selectedDependentIds = selectedTask
+    ? new Set(depIndex.dependentIdsByTaskId.get(selectedTask.id) ?? [])
+    : new Set();
 
   const rows = tasks.filter((task) => {
     const depIds = depIndex.depIdsByOwnerId.get(task.id) ?? [];
@@ -333,6 +417,17 @@ function renderStructureView(depIndex) {
     const dependentIds = depIndex.dependentIdsByTaskId.get(task.id) ?? [];
     const blocking = getBlockingDependencyTitles(depIds, depIndex);
     const expanded = isStructureRowExpanded(task.id);
+    const isSelected = Boolean(selectedTask && task.id === selectedTask.id);
+    const isDep = Boolean(selectedTask && selectedDepIds.has(task.id));
+    const isDependent = Boolean(selectedTask && selectedDependentIds.has(task.id));
+    const hasCycle = Boolean(cycleTaskIds?.has(task.id));
+    const rowClassName = [
+      'task-structure-row',
+      isSelected ? 'is-selected' : '',
+      isDep ? 'is-dependency' : '',
+      isDependent ? 'is-dependent' : '',
+      hasCycle ? 'has-cycle' : '',
+    ].filter(Boolean).join(' ');
 
     const depChips = depIds.length === 0
       ? '<span class="task-link-chip is-muted">无</span>'
@@ -349,12 +444,14 @@ function renderStructureView(depIndex) {
       : '依赖均已结束或无依赖';
 
     return `
-      <div class="task-structure-row" data-structure-task-id="${escapeHtml(task.id)}">
+      <div class="${rowClassName}" data-structure-task-id="${escapeHtml(task.id)}">
         <div class="task-structure-main">
           <div class="task-structure-name">
             <strong>${escapeHtml(getTaskDisplayName(task))}</strong>
             <span class="status-dot ${escapeHtml(task.status)}"></span>
             <span class="task-structure-meta">${escapeHtml(formatTaskStatus(task.status))}</span>
+            ${isSelected ? '<span class="task-focus-badge">焦点</span>' : ''}
+            ${hasCycle ? '<span class="task-cycle-badge">环依赖</span>' : ''}
           </div>
           <div class="task-structure-meta">${escapeHtml(blockedText)}</div>
         </div>
@@ -397,7 +494,8 @@ function renderStructureView(depIndex) {
 }
 
 function scrollToTaskCard(taskId) {
-  const selector = `[data-task-id="${CSS.escape(taskId)}"]`;
+  // Avoid matching structure-view buttons (which also carry data-task-id).
+  const selector = `.task-cluster[data-task-id="${CSS.escape(taskId)}"]`;
   const target = document.querySelector(selector);
 
   if (!target) {
@@ -499,7 +597,8 @@ function renderTasks() {
   }
 
   const depIndex = buildDependencyIndex(tasks);
-  renderStructureView(depIndex);
+  const cycleTaskIds = detectCycleTaskIds(depIndex);
+  renderStructureView(depIndex, { cycleTaskIds });
   const summary = summarizeTasks();
   tasksSummary.innerHTML = [
     { label: '任务总数', value: summary.total },
@@ -1674,6 +1773,20 @@ structureList?.addEventListener('click', (event) => {
   const actionButton = event.target.closest('button[data-action]');
 
   if (!actionButton) {
+    const row = event.target.closest('.task-structure-row');
+
+    if (!row) {
+      return;
+    }
+
+    const nextId = row.dataset.structureTaskId;
+
+    if (!nextId) {
+      return;
+    }
+
+    structureSelectedTaskId = structureSelectedTaskId === nextId ? null : nextId;
+    renderTasks();
     return;
   }
 
@@ -1685,6 +1798,9 @@ structureList?.addEventListener('click', (event) => {
   }
 
   if (action === 'goto-task') {
+    // Keep selection in sync with navigation intent.
+    structureSelectedTaskId = taskId;
+    renderTasks();
     if (!scrollToTaskCard(taskId)) {
       appendLog('未找到对应任务卡区域。', 'warn');
     }
@@ -1699,7 +1815,8 @@ structureList?.addEventListener('click', (event) => {
 
   if (action === 'toggle-structure-details') {
     setStructureRowExpanded(taskId, !isStructureRowExpanded(taskId));
-    renderStructureView(buildDependencyIndex(tasks));
+    renderTasks();
+    return;
   }
 });
 selectProjectButton.addEventListener('click', selectProject);

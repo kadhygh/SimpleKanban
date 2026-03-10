@@ -384,6 +384,50 @@ textarea:disabled {
   background: rgba(17, 21, 32, 0.85);
 }
 
+.task-structure-row.is-selected {
+  /* Keep relation border colors, but make selection distinct via outline + subtle lift. */
+  outline: 2px solid rgba(124, 156, 255, 0.7);
+  outline-offset: 2px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+  background: rgba(17, 21, 32, 0.96);
+}
+
+.task-structure-row.is-dependency {
+  border-color: rgba(117, 211, 143, 0.55);
+}
+
+.task-structure-row.is-dependent {
+  border-color: rgba(124, 156, 255, 0.45);
+}
+
+.task-structure-row.has-cycle {
+  border-color: rgba(255, 206, 115, 0.55);
+}
+
+.task-cycle-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 206, 115, 0.4);
+  background: rgba(255, 206, 115, 0.1);
+  color: var(--warn);
+  font-size: 0.85rem;
+  line-height: 1.2;
+}
+
+.task-focus-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(124, 156, 255, 0.45);
+  background: rgba(124, 156, 255, 0.16);
+  color: var(--text);
+  font-size: 0.85rem;
+  line-height: 1.2;
+}
+
 .task-structure-main {
   min-width: 0;
   display: grid;
