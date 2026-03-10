@@ -62,6 +62,7 @@ const TASK_STATUS_LABELS = {
   idle: '未运行',
   running: '运行中',
   waiting: '等待处理',
+  lost: '会话丢失',
   ended: '已结束',
 };
 
@@ -597,6 +598,7 @@ function summarizeTasks() {
     idle: 0,
     running: 0,
     waiting: 0,
+    lost: 0,
     ended: 0,
   };
 
@@ -657,6 +659,7 @@ function renderTasks() {
     { label: '未运行', value: summary.idle },
     { label: '运行中', value: summary.running },
     { label: '等待处理', value: summary.waiting },
+    { label: '会话丢失', value: summary.lost },
     { label: '已结束', value: summary.ended },
   ].map((item) => `
     <div class="summary-chip">
@@ -735,7 +738,10 @@ function renderTasks() {
               <span class="status-dot ${escapeHtml(task.status)}"></span>
               <strong>${escapeHtml(formatTaskStatus(task.status))}</strong>
             </div>
-            <span class="hint">${escapeHtml(task.lastRunAt ? `最近运行：${formatTaskTime(task.lastRunAt)}` : '尚未运行。')}</span>
+            <span class="hint">${escapeHtml(task.status === 'lost'
+              ? '会话已丢失（服务重启或终端退出）。可重新运行以创建新会话。'
+              : (task.lastRunAt ? `最近运行：${formatTaskTime(task.lastRunAt)}` : '尚未运行。')
+            )}</span>
           </div>
 
           <div class="task-card-actions">

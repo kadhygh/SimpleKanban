@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 
 const dataDir = path.resolve(process.cwd(), 'source/server/data');
 const stateFilePath = path.join(dataDir, 'project-state.json');
-const TASK_STATUSES = new Set(['idle', 'running', 'waiting', 'ended']);
+const TASK_STATUSES = new Set(['idle', 'running', 'waiting', 'lost', 'ended']);
 const TASK_ATTACHMENT_TYPES = new Set(['note']);
 const MEMORY_TEXT_LIMIT = 8000;
 const MEMORY_ENABLED = process.env.SIMPLEKANBAN_ENABLE_MEMORY === '1';
@@ -252,9 +252,8 @@ function mapTask(task) {
   };
 }
 
-async function readState() {
+async function readStateUnsafe() {
   await ensureStore();
-  await mutationQueue;
 
   try {
     const raw = await fs.readFile(stateFilePath, 'utf8');
@@ -289,6 +288,12 @@ async function readState() {
 
     throw error;
   }
+}
+
+async function readState() {
+  // Wait for any queued mutations to flush before serving read-only queries.
+  await mutationQueue;
+  return readStateUnsafe();
 }
 
 async function writeState(state) {
@@ -342,7 +347,7 @@ export async function readCurrentProject() {
 
 export async function saveCurrentProject(projectPath) {
   return enqueueMutation(async () => {
-    const state = await readState();
+    const state = await readStateUnsafe();
     const project = mapProject(projectPath);
     await writeState({
       ...state,
@@ -356,6 +361,56 @@ export async function saveCurrentProject(projectPath) {
 export async function listTasks() {
   const state = await readState();
   return state.tasks;
+}
+
+export async function markInterruptedTasksLost(activeSessionId = null) {
+  return enqueueMutation(async () => {
+    const state = await readStateUnsafe();
+    const timestamp = now();
+
+    if (!Array.isArray(state.tasks) || state.tasks.length === 0) {
+      return { changed: false, affectedCount: 0 };
+    }
+
+    let affectedCount = 0;
+
+    const nextTasks = state.tasks.map((task) => {
+      if (!task) {
+        return task;
+      }
+
+      if (task.status !== 'running' && task.status !== 'waiting') {
+        return task;
+      }
+
+      // On boot, any previous "running/waiting" task cannot be trusted because PTY sessions don't survive restarts.
+      // If an active session id is provided, keep tasks bound to it.
+      if (activeSessionId && task.linkedSessionId === activeSessionId) {
+        return task;
+      }
+
+      affectedCount += 1;
+
+      return {
+        ...task,
+        status: 'lost',
+        linkedSessionId: null,
+        lastStatusAt: timestamp,
+        updatedAt: timestamp,
+      };
+    });
+
+    if (affectedCount === 0) {
+      return { changed: false, affectedCount: 0 };
+    }
+
+    await writeState({
+      ...state,
+      tasks: nextTasks,
+    });
+
+    return { changed: true, affectedCount };
+  });
 }
 
 export async function readMemory() {
@@ -373,7 +428,7 @@ export async function updateMemory(patch) {
   }
 
   return enqueueMutation(async () => {
-    const state = await readState();
+    const state = await readStateUnsafe();
     const current = normalizeMemory(state.memory);
     const timestamp = now();
 
@@ -415,7 +470,7 @@ export async function createTask(input) {
       throw new Error('Task executorId is required.');
     }
 
-    const state = await readState();
+    const state = await readStateUnsafe();
     const timestamp = now();
     const task = mapTask({
       id: crypto.randomUUID(),
@@ -448,7 +503,7 @@ export async function getTask(taskId) {
 
 export async function updateTask(taskId, patch) {
   return enqueueMutation(async () => {
-    const state = await readState();
+    const state = await readStateUnsafe();
     const index = state.tasks.findIndex((task) => task.id === taskId);
 
     if (index === -1) {

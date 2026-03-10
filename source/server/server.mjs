@@ -13,6 +13,7 @@ import {
   createTask,
   getTask,
   updateTask,
+  markInterruptedTasksLost,
 } from './lib/project-store.mjs';
 import { ensureDirectoryPath, selectProjectFolder } from './lib/folder-dialog.mjs';
 import { createTerminalSessionManager } from './lib/terminal-session-manager.mjs';
@@ -26,6 +27,15 @@ let activeTaskSessionLink = null;
 
 function now() {
   return new Date().toISOString();
+}
+
+async function reconcileTasksOnBoot() {
+  const activeSessionId = terminalSessionManager.getSnapshot()?.id ?? null;
+  const result = await markInterruptedTasksLost(activeSessionId);
+
+  if (result.changed) {
+    console.log(`[M3] Marked ${result.affectedCount} task(s) as lost on boot.`);
+  }
 }
 
 function mapTaskStatusFromSessionStatus(sessionStatus) {
@@ -735,6 +745,8 @@ function shutdown() {
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+await reconcileTasksOnBoot();
 
 server.listen(port, host, () => {
   console.log(`SimpleKanban M2 server listening on http://${host}:${port}`);

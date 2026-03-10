@@ -811,6 +811,10 @@ textarea:disabled {
   background: var(--warn);
 }
 
+.status-dot.lost {
+  background: #ffb86b;
+}
+
 .status-dot.ended {
   background: #f08a8a;
 }
