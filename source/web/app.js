@@ -654,14 +654,34 @@ function renderTasks() {
   const cycleTaskIds = detectCycleTaskIds(depIndex);
   renderStructureView(depIndex, { cycleTaskIds });
   const summary = summarizeTasks();
-  tasksSummary.innerHTML = [
+
+  const focusSelectedTask = structureSelectedTaskId ? depIndex.byId.get(structureSelectedTaskId) : null;
+  const focusOnlyIds = (structureFocusOnly && focusSelectedTask)
+    ? new Set([
+        focusSelectedTask.id,
+        ...(depIndex.depIdsByOwnerId.get(focusSelectedTask.id) ?? []),
+        ...(depIndex.dependentIdsByTaskId.get(focusSelectedTask.id) ?? []),
+      ])
+    : null;
+
+  const visibleTasks = focusOnlyIds
+    ? tasks.filter((task) => focusOnlyIds.has(task.id))
+    : tasks;
+
+  const summaryItems = [
     { label: '任务总数', value: summary.total },
     { label: '未运行', value: summary.idle },
     { label: '运行中', value: summary.running },
     { label: '等待处理', value: summary.waiting },
     { label: '会话丢失', value: summary.lost },
     { label: '已结束', value: summary.ended },
-  ].map((item) => `
+  ];
+
+  if (structureFocusOnly) {
+    summaryItems.push({ label: '当前显示', value: focusSelectedTask ? visibleTasks.length : 0 });
+  }
+
+  tasksSummary.innerHTML = summaryItems.map((item) => `
     <div class="summary-chip">
       <span class="label">${item.label}</span>
       <strong>${item.value}</strong>
@@ -673,7 +693,12 @@ function renderTasks() {
     return;
   }
 
-  taskList.innerHTML = tasks.map((task) => {
+  if (structureFocusOnly && !focusSelectedTask) {
+    taskList.innerHTML = '<div class="task-empty">已启用“只看焦点子图”。请先在上方结构视图中点击一行选择焦点任务，然后这里才会展示对应子图的任务卡。</div>';
+    return;
+  }
+
+  taskList.innerHTML = visibleTasks.map((task) => {
     const executorName = executors.find((executor) => executor.id === task.executorId)?.name ?? task.executorId ?? '未绑定';
     const sessionShortId = task.linkedSessionId ? task.linkedSessionId.slice(0, 8) : '—';
     const canRun = Boolean(currentProject?.path && task.executorId);
