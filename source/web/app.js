@@ -30,6 +30,7 @@ const tasksSummary = document.querySelector('#tasks-summary');
 const createTaskButton = document.querySelector('#create-task');
 const structureFilter = document.querySelector('#structure-filter');
 const structureList = document.querySelector('#structure-list');
+const structureFocusOnlyToggle = document.querySelector('#structure-focus-only');
 
 const { Terminal } = window;
 const FitAddonCtor = window.FitAddon?.FitAddon;
@@ -55,6 +56,7 @@ let lastKnownTerminalSize = {
 let structureFilterMode = 'all';
 const structureRowState = new Map();
 let structureSelectedTaskId = null;
+let structureFocusOnly = false;
 
 const TASK_STATUS_LABELS = {
   idle: '未运行',
@@ -273,14 +275,16 @@ function setStructureRowExpanded(taskId, expanded) {
   structureRowState.set(taskId, { ...current, expanded: Boolean(expanded) });
 }
 
-function renderTaskIdChips(ids, titleById, { muted = false } = {}) {
+function renderTaskIdChips(ids, titleById, { muted = false, classNameForId } = {}) {
   if (!ids || ids.length === 0) {
     return `<span class="task-link-chip is-muted">${muted ? '无' : '—'}</span>`;
   }
 
   return ids.map((id) => {
     const name = titleById.get(id) ?? id.slice(0, 8);
-    return `<button type="button" class="task-link-chip" data-action="goto-task" data-task-id="${escapeHtml(id)}">${escapeHtml(name)}</button>`;
+    const extraClass = typeof classNameForId === 'function' ? classNameForId(id) : '';
+    const className = ['task-link-chip', extraClass].filter(Boolean).join(' ');
+    return `<button type="button" class="${className}" data-action="goto-task" data-task-id="${escapeHtml(id)}">${escapeHtml(name)}</button>`;
   }).join('');
 }
 
@@ -378,8 +382,42 @@ function renderStructureView(depIndex, { cycleTaskIds } = {}) {
   const selectedDependentIds = selectedTask
     ? new Set(depIndex.dependentIdsByTaskId.get(selectedTask.id) ?? [])
     : new Set();
+  const focusSubgraphIds = selectedTask
+    ? new Set([selectedTask.id, ...selectedDepIds, ...selectedDependentIds])
+    : null;
+
+  if (structureFocusOnly && !selectedTask) {
+    structureList.innerHTML = '<div class="task-structure-empty">请先在结构视图中点击一行选择焦点任务，然后才能启用“只看焦点子图”。</div>';
+    return;
+  }
+
+  function chipClassNameFor(rowTaskId, column, chipTaskId) {
+    if (!selectedTask) {
+      return '';
+    }
+
+    if (chipTaskId === selectedTask.id) {
+      return 'is-focus-chip';
+    }
+
+    if (rowTaskId === selectedTask.id) {
+      if (column === 'deps' && selectedDepIds.has(chipTaskId)) {
+        return 'is-edge-out';
+      }
+
+      if (column === 'dependents' && selectedDependentIds.has(chipTaskId)) {
+        return 'is-edge-in';
+      }
+    }
+
+    return '';
+  }
 
   const rows = tasks.filter((task) => {
+    if (structureFocusOnly && focusSubgraphIds && !focusSubgraphIds.has(task.id)) {
+      return false;
+    }
+
     const depIds = depIndex.depIdsByOwnerId.get(task.id) ?? [];
     const dependentIds = depIndex.dependentIdsByTaskId.get(task.id) ?? [];
     const blocking = getBlockingDependencyTitles(depIds, depIndex);
@@ -431,12 +469,16 @@ function renderStructureView(depIndex, { cycleTaskIds } = {}) {
 
     const depChips = depIds.length === 0
       ? '<span class="task-link-chip is-muted">无</span>'
-      : renderTaskIdChips(depIds.slice(0, 6), titleById)
+      : renderTaskIdChips(depIds.slice(0, 6), titleById, {
+          classNameForId: (chipId) => chipClassNameFor(task.id, 'deps', chipId),
+        })
         + (depIds.length > 6 ? `<span class="task-link-chip is-muted">+${depIds.length - 6}</span>` : '');
 
     const dependentChips = dependentIds.length === 0
       ? '<span class="task-link-chip is-muted">无</span>'
-      : renderTaskIdChips(dependentIds.slice(0, 6), titleById)
+      : renderTaskIdChips(dependentIds.slice(0, 6), titleById, {
+          classNameForId: (chipId) => chipClassNameFor(task.id, 'dependents', chipId),
+        })
         + (dependentIds.length > 6 ? `<span class="task-link-chip is-muted">+${dependentIds.length - 6}</span>` : '');
 
     const blockedText = blocking.length > 0
@@ -477,13 +519,19 @@ function renderStructureView(depIndex, { cycleTaskIds } = {}) {
             <div class="task-structure-details-block">
               <span class="label">依赖（全部）</span>
               <div class="task-structure-details-box">
-                <div class="task-structure-chips">${renderTaskIdChips(depIds, titleById, { muted: true })}</div>
+                <div class="task-structure-chips">${renderTaskIdChips(depIds, titleById, {
+                  muted: true,
+                  classNameForId: (chipId) => chipClassNameFor(task.id, 'deps', chipId),
+                })}</div>
               </div>
             </div>
             <div class="task-structure-details-block">
               <span class="label">被依赖（全部）</span>
               <div class="task-structure-details-box">
-                <div class="task-structure-chips">${renderTaskIdChips(dependentIds, titleById, { muted: true })}</div>
+                <div class="task-structure-chips">${renderTaskIdChips(dependentIds, titleById, {
+                  muted: true,
+                  classNameForId: (chipId) => chipClassNameFor(task.id, 'dependents', chipId),
+                })}</div>
               </div>
             </div>
           </div>
@@ -594,6 +642,10 @@ function syncTaskExecutorOptions() {
 function renderTasks() {
   if (!taskList || !tasksSummary) {
     return;
+  }
+
+  if (structureFocusOnlyToggle) {
+    structureFocusOnlyToggle.checked = structureFocusOnly;
   }
 
   const depIndex = buildDependencyIndex(tasks);
@@ -1766,6 +1818,11 @@ taskList?.addEventListener('click', async (event) => {
 
 structureFilter?.addEventListener('change', () => {
   structureFilterMode = structureFilter.value || 'all';
+  renderTasks();
+});
+
+structureFocusOnlyToggle?.addEventListener('change', () => {
+  structureFocusOnly = Boolean(structureFocusOnlyToggle.checked);
   renderTasks();
 });
 

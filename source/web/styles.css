@@ -363,6 +363,29 @@ textarea:disabled {
   flex-wrap: wrap;
 }
 
+.task-structure-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid #232836;
+  background: rgba(12, 14, 19, 0.45);
+  color: var(--text);
+  user-select: none;
+}
+
+.task-structure-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.task-structure-toggle span {
+  font-size: 0.95rem;
+  line-height: 1.2;
+}
+
 .task-structure-filter {
   display: grid;
   gap: 8px;
@@ -475,6 +498,21 @@ textarea:disabled {
   color: var(--text);
   font-size: 0.9rem;
   line-height: 1.2;
+}
+
+.task-link-chip.is-focus-chip {
+  border-color: rgba(124, 156, 255, 0.65);
+  background: rgba(124, 156, 255, 0.18);
+}
+
+.task-link-chip.is-edge-out {
+  border-color: rgba(117, 211, 143, 0.7);
+  background: rgba(117, 211, 143, 0.12);
+}
+
+.task-link-chip.is-edge-in {
+  border-color: rgba(124, 156, 255, 0.55);
+  background: rgba(124, 156, 255, 0.12);
 }
 
 .task-link-chip[type="button"] {
