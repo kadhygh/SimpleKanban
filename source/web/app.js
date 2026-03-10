@@ -53,6 +53,7 @@ let lastKnownTerminalSize = {
   rows: null,
 };
 let structureFilterMode = 'all';
+const structureRowState = new Map();
 
 const TASK_STATUS_LABELS = {
   idle: '未运行',
@@ -262,6 +263,26 @@ function getTaskDisplayName(task) {
   return task?.title ? task.title : (task?.id ? task.id.slice(0, 8) : '—');
 }
 
+function isStructureRowExpanded(taskId) {
+  return structureRowState.get(taskId)?.expanded === true;
+}
+
+function setStructureRowExpanded(taskId, expanded) {
+  const current = structureRowState.get(taskId) ?? {};
+  structureRowState.set(taskId, { ...current, expanded: Boolean(expanded) });
+}
+
+function renderTaskIdChips(ids, titleById, { muted = false } = {}) {
+  if (!ids || ids.length === 0) {
+    return `<span class="task-link-chip is-muted">${muted ? '无' : '—'}</span>`;
+  }
+
+  return ids.map((id) => {
+    const name = titleById.get(id) ?? id.slice(0, 8);
+    return `<button type="button" class="task-link-chip" data-action="goto-task" data-task-id="${escapeHtml(id)}">${escapeHtml(name)}</button>`;
+  }).join('');
+}
+
 function renderStructureView(depIndex) {
   if (!structureList) {
     return;
@@ -311,15 +332,16 @@ function renderStructureView(depIndex) {
     const depIds = depIndex.depIdsByOwnerId.get(task.id) ?? [];
     const dependentIds = depIndex.dependentIdsByTaskId.get(task.id) ?? [];
     const blocking = getBlockingDependencyTitles(depIds, depIndex);
+    const expanded = isStructureRowExpanded(task.id);
 
     const depChips = depIds.length === 0
       ? '<span class="task-link-chip is-muted">无</span>'
-      : depIds.slice(0, 6).map((id) => `<span class="task-link-chip">${escapeHtml(titleById.get(id) ?? id.slice(0, 8))}</span>`).join('')
+      : renderTaskIdChips(depIds.slice(0, 6), titleById)
         + (depIds.length > 6 ? `<span class="task-link-chip is-muted">+${depIds.length - 6}</span>` : '');
 
     const dependentChips = dependentIds.length === 0
       ? '<span class="task-link-chip is-muted">无</span>'
-      : dependentIds.slice(0, 6).map((id) => `<span class="task-link-chip">${escapeHtml(titleById.get(id) ?? id.slice(0, 8))}</span>`).join('')
+      : renderTaskIdChips(dependentIds.slice(0, 6), titleById)
         + (dependentIds.length > 6 ? `<span class="task-link-chip is-muted">+${dependentIds.length - 6}</span>` : '');
 
     const blockedText = blocking.length > 0
@@ -350,7 +372,25 @@ function renderStructureView(depIndex) {
         <div class="task-structure-actions">
           <button class="secondary-button" data-action="goto-task" data-task-id="${escapeHtml(task.id)}">定位</button>
           <button class="secondary-button" data-action="edit-deps" data-task-id="${escapeHtml(task.id)}">编辑依赖</button>
+          <button class="secondary-button" data-action="toggle-structure-details" data-task-id="${escapeHtml(task.id)}">${expanded ? '收起' : '展开'}</button>
         </div>
+
+        ${expanded ? `
+          <div class="task-structure-details">
+            <div class="task-structure-details-block">
+              <span class="label">依赖（全部）</span>
+              <div class="task-structure-details-box">
+                <div class="task-structure-chips">${renderTaskIdChips(depIds, titleById, { muted: true })}</div>
+              </div>
+            </div>
+            <div class="task-structure-details-block">
+              <span class="label">被依赖（全部）</span>
+              <div class="task-structure-details-box">
+                <div class="task-structure-chips">${renderTaskIdChips(dependentIds, titleById, { muted: true })}</div>
+              </div>
+            </div>
+          </div>
+        ` : ''}
       </div>
     `;
   }).join('');
@@ -1654,6 +1694,12 @@ structureList?.addEventListener('click', (event) => {
   if (action === 'edit-deps') {
     openTaskDependencyEditor(taskId);
     scrollToTaskCard(taskId);
+    return;
+  }
+
+  if (action === 'toggle-structure-details') {
+    setStructureRowExpanded(taskId, !isStructureRowExpanded(taskId));
+    renderStructureView(buildDependencyIndex(tasks));
   }
 });
 selectProjectButton.addEventListener('click', selectProject);

@@ -6,13 +6,22 @@ const dataDir = path.resolve(process.cwd(), 'source/server/data');
 const stateFilePath = path.join(dataDir, 'project-state.json');
 const TASK_STATUSES = new Set(['idle', 'running', 'waiting', 'ended']);
 const TASK_ATTACHMENT_TYPES = new Set(['note']);
-let writeQueue = Promise.resolve();
 const MEMORY_TEXT_LIMIT = 8000;
 const MEMORY_ENABLED = process.env.SIMPLEKANBAN_ENABLE_MEMORY === '1';
 const TASK_DEPENDENCY_LIMIT = 50;
+let mutationQueue = Promise.resolve();
 
 function now() {
   return new Date().toISOString();
+}
+
+function enqueueMutation(fn) {
+  // Serialize read-modify-write to avoid losing updates under concurrent callers.
+  mutationQueue = mutationQueue
+    .catch(() => {})
+    .then(fn);
+
+  return mutationQueue;
 }
 
 function mapProject(projectPath) {
@@ -245,7 +254,7 @@ function mapTask(task) {
 
 async function readState() {
   await ensureStore();
-  await writeQueue;
+  await mutationQueue;
 
   try {
     const raw = await fs.readFile(stateFilePath, 'utf8');
@@ -301,11 +310,7 @@ async function writeState(state) {
       : [],
   }, null, 2);
 
-  writeQueue = writeQueue
-    .catch(() => {})
-    .then(() => fs.writeFile(stateFilePath, payload, 'utf8'));
-
-  await writeQueue;
+  await fs.writeFile(stateFilePath, payload, 'utf8');
 }
 
 function buildTaskPatch(currentTask, patch) {
@@ -336,14 +341,16 @@ export async function readCurrentProject() {
 }
 
 export async function saveCurrentProject(projectPath) {
-  const state = await readState();
-  const project = mapProject(projectPath);
-  await writeState({
-    ...state,
-    project,
-  });
+  return enqueueMutation(async () => {
+    const state = await readState();
+    const project = mapProject(projectPath);
+    await writeState({
+      ...state,
+      project,
+    });
 
-  return project;
+    return project;
+  });
 }
 
 export async function listTasks() {
@@ -365,69 +372,73 @@ export async function updateMemory(patch) {
     throw new Error('Memory feature is sealed. Set SIMPLEKANBAN_ENABLE_MEMORY=1 to enable.');
   }
 
-  const state = await readState();
-  const current = normalizeMemory(state.memory);
-  const timestamp = now();
+  return enqueueMutation(async () => {
+    const state = await readState();
+    const current = normalizeMemory(state.memory);
+    const timestamp = now();
 
-  const shouldMarkVerified = Boolean(patch?.markVerified);
-  const verifiedNote = patch?.verifiedNote != null ? normalizeMemoryText(patch.verifiedNote) : current.verifiedNote;
+    const shouldMarkVerified = Boolean(patch?.markVerified);
+    const verifiedNote = patch?.verifiedNote != null ? normalizeMemoryText(patch.verifiedNote) : current.verifiedNote;
 
-  const nextMemory = normalizeMemory({
-    ...current,
-    focusTaskId: patch?.focusTaskId === null
-      ? null
-      : (patch?.focusTaskId ? String(patch.focusTaskId) : current.focusTaskId),
-    now: patch?.now != null ? normalizeMemoryText(patch.now) : current.now,
-    next: patch?.next != null ? normalizeMemoryText(patch.next) : current.next,
-    updatedAt: timestamp,
-    verifiedAt: shouldMarkVerified ? timestamp : current.verifiedAt,
-    verifiedNote: shouldMarkVerified ? verifiedNote : verifiedNote,
+    const nextMemory = normalizeMemory({
+      ...current,
+      focusTaskId: patch?.focusTaskId === null
+        ? null
+        : (patch?.focusTaskId ? String(patch.focusTaskId) : current.focusTaskId),
+      now: patch?.now != null ? normalizeMemoryText(patch.now) : current.now,
+      next: patch?.next != null ? normalizeMemoryText(patch.next) : current.next,
+      updatedAt: timestamp,
+      verifiedAt: shouldMarkVerified ? timestamp : current.verifiedAt,
+      verifiedNote: shouldMarkVerified ? verifiedNote : verifiedNote,
+    });
+
+    await writeState({
+      ...state,
+      memory: nextMemory,
+    });
+
+    return nextMemory;
   });
-
-  await writeState({
-    ...state,
-    memory: nextMemory,
-  });
-
-  return nextMemory;
 }
 
 export async function createTask(input) {
-  const title = String(input?.title ?? '').trim();
-  const description = String(input?.description ?? '').trim();
-  const executorId = String(input?.executorId ?? '').trim();
+  return enqueueMutation(async () => {
+    const title = String(input?.title ?? '').trim();
+    const description = String(input?.description ?? '').trim();
+    const executorId = String(input?.executorId ?? '').trim();
 
-  if (!title) {
-    throw new Error('Task title is required.');
-  }
+    if (!title) {
+      throw new Error('Task title is required.');
+    }
 
-  if (!executorId) {
-    throw new Error('Task executorId is required.');
-  }
+    if (!executorId) {
+      throw new Error('Task executorId is required.');
+    }
 
-  const state = await readState();
-  const timestamp = now();
-  const task = mapTask({
-    id: crypto.randomUUID(),
-    title,
-    description,
-    executorId,
-    status: 'idle',
-    dependencyIds: [],
-    linkedSessionId: null,
-    lastRunAt: null,
-    lastStatusAt: timestamp,
-    lastTerminalActivityAt: null,
-    lastTerminalOutput: null,
-    attachments: [],
-    note: null,
-    createdAt: timestamp,
-    updatedAt: timestamp,
+    const state = await readState();
+    const timestamp = now();
+    const task = mapTask({
+      id: crypto.randomUUID(),
+      title,
+      description,
+      executorId,
+      status: 'idle',
+      dependencyIds: [],
+      linkedSessionId: null,
+      lastRunAt: null,
+      lastStatusAt: timestamp,
+      lastTerminalActivityAt: null,
+      lastTerminalOutput: null,
+      attachments: [],
+      note: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+
+    state.tasks = [...state.tasks, task];
+    await writeState(state);
+    return task;
   });
-
-  state.tasks = [...state.tasks, task];
-  await writeState(state);
-  return task;
 }
 
 export async function getTask(taskId) {
@@ -436,21 +447,23 @@ export async function getTask(taskId) {
 }
 
 export async function updateTask(taskId, patch) {
-  const state = await readState();
-  const index = state.tasks.findIndex((task) => task.id === taskId);
+  return enqueueMutation(async () => {
+    const state = await readState();
+    const index = state.tasks.findIndex((task) => task.id === taskId);
 
-  if (index === -1) {
-    return null;
-  }
+    if (index === -1) {
+      return null;
+    }
 
-  const currentTask = state.tasks[index];
-  const nextTask = buildTaskPatch(currentTask, patch);
+    const currentTask = state.tasks[index];
+    const nextTask = buildTaskPatch(currentTask, patch);
 
-  if (areTasksEqual(currentTask, nextTask)) {
-    return currentTask;
-  }
+    if (areTasksEqual(currentTask, nextTask)) {
+      return currentTask;
+    }
 
-  state.tasks[index] = nextTask;
-  await writeState(state);
-  return nextTask;
+    state.tasks[index] = nextTask;
+    await writeState(state);
+    return nextTask;
+  });
 }
