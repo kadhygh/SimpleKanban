@@ -28,6 +28,8 @@ const taskExecutorSelect = document.querySelector('#task-executor-select');
 const taskList = document.querySelector('#task-list');
 const tasksSummary = document.querySelector('#tasks-summary');
 const createTaskButton = document.querySelector('#create-task');
+const structureFilter = document.querySelector('#structure-filter');
+const structureList = document.querySelector('#structure-list');
 
 const { Terminal } = window;
 const FitAddonCtor = window.FitAddon?.FitAddon;
@@ -42,6 +44,7 @@ let resizeTimer = null;
 let executors = [];
 let tasks = [];
 const noteEditorState = new Map();
+const dependencyEditorState = new Map();
 let selectedExecutorId = null;
 const defaultExecutorOutputName = 'project-summary';
 let executorStatusLock = null;
@@ -49,6 +52,7 @@ let lastKnownTerminalSize = {
   cols: null,
   rows: null,
 };
+let structureFilterMode = 'all';
 
 const TASK_STATUS_LABELS = {
   idle: '未运行',
@@ -109,8 +113,49 @@ function truncateText(value, maxLength = 140) {
   return `${normalized.slice(0, maxLength - 1)}…`;
 }
 
-function getTaskNoteEditorState(task) {
-  const existing = noteEditorState.get(task.id);
+function getTaskPrimaryNote(task) {
+  if (Array.isArray(task?.attachments)) {
+    const noteAttachment = task.attachments.find((attachment) => attachment.type === 'note');
+
+    if (noteAttachment?.content) {
+      return {
+        content: noteAttachment.content,
+        updatedAt: noteAttachment.updatedAt ?? null,
+      };
+    }
+  }
+
+  return task?.note ?? null;
+}
+
+function normalizeDependencyIds(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set();
+  const normalized = [];
+
+  for (const item of value) {
+    const id = String(item ?? '').trim();
+
+    if (!id || seen.has(id)) {
+      continue;
+    }
+
+    seen.add(id);
+    normalized.push(id);
+
+    if (normalized.length >= 50) {
+      break;
+    }
+  }
+
+  return normalized;
+}
+
+function getTaskDependencyEditorState(task) {
+  const existing = dependencyEditorState.get(task.id);
 
   if (existing) {
     return existing;
@@ -118,7 +163,222 @@ function getTaskNoteEditorState(task) {
 
   const state = {
     isEditing: false,
-    draft: task.note?.content ?? '',
+    selectedIds: normalizeDependencyIds(task.dependencyIds),
+    isSaving: false,
+  };
+
+  dependencyEditorState.set(task.id, state);
+  return state;
+}
+
+function syncTaskDependencyEditorState(task) {
+  const state = getTaskDependencyEditorState(task);
+
+  if (!state.isEditing) {
+    state.selectedIds = normalizeDependencyIds(task.dependencyIds);
+  }
+
+  return state;
+}
+
+function formatDependencySummary(task) {
+  const depIds = normalizeDependencyIds(task?.dependencyIds);
+
+  if (depIds.length === 0) {
+    return {
+      text: '暂无依赖任务。',
+      isEmpty: true,
+    };
+  }
+
+  const titleById = new Map(tasks.map((item) => [item.id, item.title || item.id.slice(0, 8)]));
+  const resolved = depIds
+    .map((id) => titleById.get(id) ?? id.slice(0, 8))
+    .slice(0, 4);
+  const suffix = depIds.length > resolved.length ? `等 ${depIds.length} 项` : `共 ${depIds.length} 项`;
+
+  return {
+    text: `依赖：${resolved.join('，')}（${suffix}）`,
+    isEmpty: false,
+  };
+}
+
+function buildDependencyIndex(allTasks) {
+  const byId = new Map();
+  const dependentsCountById = new Map();
+  const depIdsByOwnerId = new Map();
+  const dependentIdsByTaskId = new Map();
+
+  for (const task of allTasks) {
+    byId.set(task.id, task);
+  }
+
+  for (const task of allTasks) {
+    const depIds = normalizeDependencyIds(task.dependencyIds);
+    depIdsByOwnerId.set(task.id, depIds);
+
+    for (const depId of depIds) {
+      dependentsCountById.set(depId, (dependentsCountById.get(depId) ?? 0) + 1);
+
+      const list = dependentIdsByTaskId.get(depId) ?? [];
+      list.push(task.id);
+      dependentIdsByTaskId.set(depId, list);
+    }
+  }
+
+  return {
+    byId,
+    depIdsByOwnerId,
+    dependentsCountById,
+    dependentIdsByTaskId,
+  };
+}
+
+function getBlockingDependencyTitles(depIds, index) {
+  const blocking = [];
+
+  for (const depId of depIds) {
+    const task = index.byId.get(depId);
+
+    if (!task) {
+      continue;
+    }
+
+    if (task.status === 'ended') {
+      continue;
+    }
+
+    blocking.push(task.title || depId.slice(0, 8));
+
+    if (blocking.length >= 6) {
+      break;
+    }
+  }
+
+  return blocking;
+}
+
+function getTaskDisplayName(task) {
+  return task?.title ? task.title : (task?.id ? task.id.slice(0, 8) : '—');
+}
+
+function renderStructureView(depIndex) {
+  if (!structureList) {
+    return;
+  }
+
+  if (tasks.length === 0) {
+    structureList.innerHTML = '<div class="task-structure-empty">当前没有任务卡。</div>';
+    return;
+  }
+
+  const titleById = new Map(tasks.map((task) => [task.id, getTaskDisplayName(task)]));
+
+  const rows = tasks.filter((task) => {
+    const depIds = depIndex.depIdsByOwnerId.get(task.id) ?? [];
+    const dependentIds = depIndex.dependentIdsByTaskId.get(task.id) ?? [];
+    const blocking = getBlockingDependencyTitles(depIds, depIndex);
+
+    if (structureFilterMode === 'blocked') {
+      return blocking.length > 0;
+    }
+
+    if (structureFilterMode === 'roots') {
+      return depIds.length === 0;
+    }
+
+    if (structureFilterMode === 'leaves') {
+      return dependentIds.length === 0;
+    }
+
+    if (structureFilterMode === 'hasDeps') {
+      return depIds.length > 0;
+    }
+
+    if (structureFilterMode === 'hasDependents') {
+      return dependentIds.length > 0;
+    }
+
+    return true;
+  });
+
+  if (rows.length === 0) {
+    structureList.innerHTML = '<div class="task-structure-empty">当前过滤条件下没有任务。</div>';
+    return;
+  }
+
+  structureList.innerHTML = rows.map((task) => {
+    const depIds = depIndex.depIdsByOwnerId.get(task.id) ?? [];
+    const dependentIds = depIndex.dependentIdsByTaskId.get(task.id) ?? [];
+    const blocking = getBlockingDependencyTitles(depIds, depIndex);
+
+    const depChips = depIds.length === 0
+      ? '<span class="task-link-chip is-muted">无</span>'
+      : depIds.slice(0, 6).map((id) => `<span class="task-link-chip">${escapeHtml(titleById.get(id) ?? id.slice(0, 8))}</span>`).join('')
+        + (depIds.length > 6 ? `<span class="task-link-chip is-muted">+${depIds.length - 6}</span>` : '');
+
+    const dependentChips = dependentIds.length === 0
+      ? '<span class="task-link-chip is-muted">无</span>'
+      : dependentIds.slice(0, 6).map((id) => `<span class="task-link-chip">${escapeHtml(titleById.get(id) ?? id.slice(0, 8))}</span>`).join('')
+        + (dependentIds.length > 6 ? `<span class="task-link-chip is-muted">+${dependentIds.length - 6}</span>` : '');
+
+    const blockedText = blocking.length > 0
+      ? `未结束依赖：${blocking.join('，')}${depIds.length > blocking.length ? ' 等' : ''}`
+      : '依赖均已结束或无依赖';
+
+    return `
+      <div class="task-structure-row" data-structure-task-id="${escapeHtml(task.id)}">
+        <div class="task-structure-main">
+          <div class="task-structure-name">
+            <strong>${escapeHtml(getTaskDisplayName(task))}</strong>
+            <span class="status-dot ${escapeHtml(task.status)}"></span>
+            <span class="task-structure-meta">${escapeHtml(formatTaskStatus(task.status))}</span>
+          </div>
+          <div class="task-structure-meta">${escapeHtml(blockedText)}</div>
+        </div>
+
+        <div class="task-structure-col">
+          <span class="label">依赖</span>
+          <div class="task-structure-chips">${depChips}</div>
+        </div>
+
+        <div class="task-structure-col">
+          <span class="label">被依赖</span>
+          <div class="task-structure-chips">${dependentChips}</div>
+        </div>
+
+        <div class="task-structure-actions">
+          <button class="secondary-button" data-action="goto-task" data-task-id="${escapeHtml(task.id)}">定位</button>
+          <button class="secondary-button" data-action="edit-deps" data-task-id="${escapeHtml(task.id)}">编辑依赖</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function scrollToTaskCard(taskId) {
+  const selector = `[data-task-id="${CSS.escape(taskId)}"]`;
+  const target = document.querySelector(selector);
+
+  if (!target) {
+    return false;
+  }
+
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  return true;
+}
+
+function getTaskNoteEditorState(task) {
+  const existing = noteEditorState.get(task.id);
+
+  if (existing) {
+    return existing;
+  }
+
+  const note = getTaskPrimaryNote(task);
+  const state = {
+    isEditing: false,
+    draft: note?.content ?? '',
     isSaving: false,
   };
 
@@ -128,9 +388,10 @@ function getTaskNoteEditorState(task) {
 
 function syncTaskNoteEditorState(task) {
   const state = getTaskNoteEditorState(task);
+  const note = getTaskPrimaryNote(task);
 
   if (!state.isEditing) {
-    state.draft = task.note?.content ?? '';
+    state.draft = note?.content ?? '';
   }
 
   return state;
@@ -197,6 +458,8 @@ function renderTasks() {
     return;
   }
 
+  const depIndex = buildDependencyIndex(tasks);
+  renderStructureView(depIndex);
   const summary = summarizeTasks();
   tasksSummary.innerHTML = [
     { label: '任务总数', value: summary.total },
@@ -227,79 +490,151 @@ function renderTasks() {
       ? '当前阶段所有任务共享一个活跃终端；运行新任务会把当前绑定切到这张卡。'
       : '点击运行后，会复用当前唯一活跃终端。';
     const noteEditor = syncTaskNoteEditorState(task);
-    const hasNote = Boolean(task.note?.content);
+    const note = getTaskPrimaryNote(task);
+    const hasNote = Boolean(note?.content);
     const noteActionLabel = hasNote ? '编辑备注' : '添加备注';
     const noteSummary = hasNote
-      ? summarizeTaskNote(task.note)
+      ? summarizeTaskNote(note)
       : '添加这张任务卡的上下文、说明或补充记录';
-    const noteUpdatedAt = hasNote ? formatTaskNoteUpdatedAt(task.note) : '暂无备注';
+    const noteUpdatedAt = hasNote ? formatTaskNoteUpdatedAt(note) : '暂无备注';
+    const depsEditor = syncTaskDependencyEditorState(task);
+    const depIds = depIndex.depIdsByOwnerId.get(task.id) ?? normalizeDependencyIds(task.dependencyIds);
+    const depsSummary = formatDependencySummary({ dependencyIds: depIds });
+    const depsActionLabel = depsEditor.isEditing ? '收起依赖' : '编辑依赖';
+    const dependencyCount = depIds.length;
+    const dependentsCount = depIndex.dependentsCountById.get(task.id) ?? 0;
+    const blockingDeps = getBlockingDependencyTitles(depIds, depIndex);
 
     return `
-      <article class="task-card" data-task-id="${escapeHtml(task.id)}">
-        <div class="task-card-header">
-          <div class="task-card-title">${escapeHtml(task.title)}</div>
-          <p class="task-card-description">${escapeHtml(task.description || '暂无描述。')}</p>
-        </div>
-
-        <div class="task-card-meta">
-          <div class="task-meta-grid">
-            <div>
-              <span class="label">执行器</span>
-              <div>${escapeHtml(executorName)}</div>
-            </div>
-            <div>
-              <span class="label">终端绑定</span>
-              <div>${escapeHtml(terminalBindingText)}</div>
-            </div>
-            <div>
-              <span class="label">最近更新</span>
-              <div>${escapeHtml(formatTaskTime(task.updatedAt))}</div>
-            </div>
-          </div>
-          <span class="hint">${escapeHtml(terminalHint)}</span>
-        </div>
-
-        <div class="task-card-status">
-          <div class="task-status-row">
-            <span class="status-dot ${escapeHtml(task.status)}"></span>
-            <strong>${escapeHtml(formatTaskStatus(task.status))}</strong>
-          </div>
-          <span class="hint">${escapeHtml(task.lastRunAt ? `最近运行：${formatTaskTime(task.lastRunAt)}` : '尚未运行。')}</span>
-        </div>
-
-        <section class="task-note-card ${noteEditor.isEditing ? 'editing' : ''}" data-note-card>
-          <div class="task-note-header">
-            <div>
-              <span class="label">备注</span>
-              <div class="task-note-updated">${escapeHtml(noteUpdatedAt)}</div>
-            </div>
-            <button class="secondary-button" data-action="toggle-note-editor" data-task-id="${escapeHtml(task.id)}">${escapeHtml(noteActionLabel)}</button>
+      <article class="task-cluster" data-task-id="${escapeHtml(task.id)}">
+        <section class="task-card task-primary-card">
+          <div class="task-card-header">
+            <div class="task-card-title">${escapeHtml(task.title)}</div>
+            <p class="task-card-description">${escapeHtml(task.description || '暂无描述。')}</p>
           </div>
 
-          ${noteEditor.isEditing ? `
-            <div class="task-note-editor">
-              <textarea
-                class="task-textarea task-note-textarea"
-                data-note-input="${escapeHtml(task.id)}"
-                placeholder="添加这张任务卡的上下文、说明或补充记录"
-                ${noteEditor.isSaving ? 'disabled' : ''}
-              >${escapeHtml(noteEditor.draft)}</textarea>
-              <div class="task-note-actions">
-                <button class="primary-button" data-action="save-note" data-task-id="${escapeHtml(task.id)}" ${noteEditor.isSaving ? 'disabled' : ''}>保存</button>
-                <button class="secondary-button" data-action="cancel-note" data-task-id="${escapeHtml(task.id)}" ${noteEditor.isSaving ? 'disabled' : ''}>取消</button>
+          <div class="task-card-meta">
+            <div class="task-meta-grid">
+              <div>
+                <span class="label">执行器</span>
+                <div>${escapeHtml(executorName)}</div>
+              </div>
+              <div>
+                <span class="label">终端绑定</span>
+                <div>${escapeHtml(terminalBindingText)}</div>
+              </div>
+              <div>
+                <span class="label">依赖任务</span>
+                <div>${escapeHtml(dependencyCount ? `${dependencyCount} 项` : '无')}</div>
+              </div>
+              <div>
+                <span class="label">被依赖</span>
+                <div>${escapeHtml(dependentsCount ? `${dependentsCount} 项` : '无')}</div>
+              </div>
+              <div>
+                <span class="label">最近更新</span>
+                <div>${escapeHtml(formatTaskTime(task.updatedAt))}</div>
               </div>
             </div>
-          ` : `
-            <div class="task-note-summary ${hasNote ? '' : 'is-empty'}">
-              ${escapeHtml(noteSummary || '暂无备注')}
+            <span class="hint">${escapeHtml(terminalHint)}</span>
+          </div>
+
+          <div class="task-card-status">
+            <div class="task-status-row">
+              <span class="status-dot ${escapeHtml(task.status)}"></span>
+              <strong>${escapeHtml(formatTaskStatus(task.status))}</strong>
             </div>
-          `}
+            <span class="hint">${escapeHtml(task.lastRunAt ? `最近运行：${formatTaskTime(task.lastRunAt)}` : '尚未运行。')}</span>
+          </div>
+
+          <div class="task-card-actions">
+            <button class="primary-button" data-action="run-task" data-task-id="${escapeHtml(task.id)}" ${canRun ? '' : 'disabled'}>运行</button>
+            <button class="secondary-button" data-action="focus-terminal" data-task-id="${escapeHtml(task.id)}">查看终端</button>
+          </div>
         </section>
 
-        <div class="task-card-actions">
-          <button class="primary-button" data-action="run-task" data-task-id="${escapeHtml(task.id)}" ${canRun ? '' : 'disabled'}>运行</button>
-          <button class="secondary-button" data-action="focus-terminal" data-task-id="${escapeHtml(task.id)}">查看终端</button>
-        </div>
+        <aside class="task-adjacent-lane">
+          <section class="task-deps-card" data-deps-card data-task-id="${escapeHtml(task.id)}">
+            <div class="task-deps-header">
+              <div>
+                <span class="label">结构层: 依赖</span>
+                <div class="hint">先让任务关系可编辑，再考虑画布可视化。</div>
+              </div>
+              <button class="secondary-button" data-action="toggle-deps-editor" data-task-id="${escapeHtml(task.id)}">${escapeHtml(depsActionLabel)}</button>
+            </div>
+
+            ${depsEditor.isEditing ? `
+              <div class="task-deps-editor">
+                <div class="task-deps-list">
+                  ${tasks.filter((item) => item.id !== task.id).length === 0 ? `
+                    <div class="hint">当前没有其他任务可作为依赖。</div>
+                  ` : tasks.filter((item) => item.id !== task.id).map((candidate) => {
+                    const checked = depsEditor.selectedIds.includes(candidate.id);
+                    const title = candidate.title || candidate.id.slice(0, 8);
+                    return `
+                      <label class="task-deps-item">
+                        <input
+                          type="checkbox"
+                          data-action="dep-checkbox"
+                          data-owner-task-id="${escapeHtml(task.id)}"
+                          data-dep-task-id="${escapeHtml(candidate.id)}"
+                          ${checked ? 'checked' : ''}
+                          ${depsEditor.isSaving ? 'disabled' : ''}
+                        />
+                        <span>${escapeHtml(title)}</span>
+                      </label>
+                    `;
+                  }).join('')}
+                </div>
+
+                <div class="task-deps-actions">
+                  <button class="primary-button" data-action="save-deps" data-task-id="${escapeHtml(task.id)}" ${depsEditor.isSaving ? 'disabled' : ''}>保存依赖</button>
+                  <button class="secondary-button" data-action="cancel-deps" data-task-id="${escapeHtml(task.id)}" ${depsEditor.isSaving ? 'disabled' : ''}>取消</button>
+                </div>
+              </div>
+            ` : `
+              <div class="task-deps-summary ${depsSummary.isEmpty ? 'is-empty' : ''}">
+                ${escapeHtml(depsSummary.text)}
+              </div>
+
+              ${blockingDeps.length > 0 ? `
+                <div class="task-deps-warning">
+                  <strong>依赖未结束（仅提示，不阻止运行）</strong>
+                  <div>${escapeHtml(blockingDeps.join('，'))}${dependencyCount > blockingDeps.length ? ' 等' : ''}</div>
+                </div>
+              ` : ''}
+            `}
+          </section>
+
+          <section class="task-note-card task-attachment-card ${noteEditor.isEditing ? 'editing' : ''}" data-note-card data-attachment-type="note">
+            <div class="task-note-header">
+              <div>
+                <span class="label">邻接备注</span>
+                <div class="task-note-updated">${escapeHtml(noteUpdatedAt)}</div>
+              </div>
+              <button class="secondary-button" data-action="toggle-note-editor" data-task-id="${escapeHtml(task.id)}">${escapeHtml(noteActionLabel)}</button>
+            </div>
+
+            ${noteEditor.isEditing ? `
+              <div class="task-note-editor">
+                <textarea
+                  class="task-textarea task-note-textarea"
+                  data-note-input="${escapeHtml(task.id)}"
+                  placeholder="添加这张任务卡的上下文、说明或补充记录"
+                  ${noteEditor.isSaving ? 'disabled' : ''}
+                >${escapeHtml(noteEditor.draft)}</textarea>
+                <div class="task-note-actions">
+                  <button class="primary-button" data-action="save-note" data-task-id="${escapeHtml(task.id)}" ${noteEditor.isSaving ? 'disabled' : ''}>保存</button>
+                  <button class="secondary-button" data-action="cancel-note" data-task-id="${escapeHtml(task.id)}" ${noteEditor.isSaving ? 'disabled' : ''}>取消</button>
+                </div>
+              </div>
+            ` : `
+              <div class="task-note-summary ${hasNote ? '' : 'is-empty'}">
+                ${escapeHtml(noteSummary || '暂无备注')}
+              </div>
+            `}
+          </section>
+        </aside>
       </article>
     `;
   }).join('');
@@ -436,9 +771,10 @@ function openTaskNoteEditor(taskId) {
   }
 
   const state = getTaskNoteEditorState(task);
+  const note = getTaskPrimaryNote(task);
   state.isEditing = true;
   state.isSaving = false;
-  state.draft = task.note?.content ?? '';
+  state.draft = note?.content ?? '';
   renderTasks();
 
   window.requestAnimationFrame(() => {
@@ -454,9 +790,10 @@ function cancelTaskNoteEditor(taskId) {
   }
 
   const state = getTaskNoteEditorState(task);
+  const note = getTaskPrimaryNote(task);
   state.isEditing = false;
   state.isSaving = false;
-  state.draft = task.note?.content ?? '';
+  state.draft = note?.content ?? '';
   renderTasks();
 }
 
@@ -498,6 +835,93 @@ async function saveTaskNote(taskId) {
     state.isSaving = false;
     renderTasks();
     appendLog(`保存备注失败：${error.message}`, 'warn');
+  }
+}
+
+function openTaskDependencyEditor(taskId) {
+  const task = tasks.find((item) => item.id === taskId);
+
+  if (!task) {
+    return;
+  }
+
+  const state = getTaskDependencyEditorState(task);
+  state.isEditing = true;
+  state.isSaving = false;
+  state.selectedIds = normalizeDependencyIds(task.dependencyIds);
+  renderTasks();
+}
+
+function cancelTaskDependencyEditor(taskId) {
+  const task = tasks.find((item) => item.id === taskId);
+
+  if (!task) {
+    return;
+  }
+
+  const state = getTaskDependencyEditorState(task);
+  state.isEditing = false;
+  state.isSaving = false;
+  state.selectedIds = normalizeDependencyIds(task.dependencyIds);
+  renderTasks();
+}
+
+function toggleTaskDependencySelection(ownerTaskId, dependencyId, checked) {
+  const owner = tasks.find((item) => item.id === ownerTaskId);
+
+  if (!owner) {
+    return;
+  }
+
+  const state = getTaskDependencyEditorState(owner);
+  const next = new Set(state.selectedIds);
+
+  if (checked) {
+    next.add(dependencyId);
+  } else {
+    next.delete(dependencyId);
+  }
+
+  state.selectedIds = Array.from(next);
+}
+
+async function saveTaskDependencies(taskId) {
+  const task = tasks.find((item) => item.id === taskId);
+
+  if (!task) {
+    appendLog('未找到对应任务卡。', 'warn');
+    return;
+  }
+
+  const state = getTaskDependencyEditorState(task);
+  state.isSaving = true;
+  renderTasks();
+
+  try {
+    const response = await fetch('/api/tasks/dependencies', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        taskId,
+        dependencyIds: state.selectedIds,
+      }),
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? '保存依赖失败');
+    }
+
+    state.isEditing = false;
+    state.isSaving = false;
+    upsertTask(payload.task);
+    appendLog(`任务卡“${payload.task.title}”依赖关系已保存。`, 'success');
+  } catch (error) {
+    state.isSaving = false;
+    renderTasks();
+    appendLog(`保存依赖失败：${error.message}`, 'warn');
   }
 }
 
@@ -1110,6 +1534,20 @@ taskList?.addEventListener('input', (event) => {
   const input = event.target.closest('textarea[data-note-input]');
 
   if (!input) {
+    const checkbox = event.target.closest('input[type="checkbox"][data-action="dep-checkbox"]');
+
+    if (!checkbox) {
+      return;
+    }
+
+    const ownerTaskId = checkbox.dataset.ownerTaskId;
+    const depTaskId = checkbox.dataset.depTaskId;
+
+    if (!ownerTaskId || !depTaskId) {
+      return;
+    }
+
+    toggleTaskDependencySelection(ownerTaskId, depTaskId, checkbox.checked);
     return;
   }
 
@@ -1156,6 +1594,66 @@ taskList?.addEventListener('click', async (event) => {
 
   if (action === 'save-note') {
     await saveTaskNote(taskId);
+    return;
+  }
+
+  if (action === 'toggle-deps-editor') {
+    const task = tasks.find((item) => item.id === taskId);
+
+    if (!task) {
+      return;
+    }
+
+    const state = getTaskDependencyEditorState(task);
+
+    if (state.isEditing) {
+      cancelTaskDependencyEditor(taskId);
+    } else {
+      openTaskDependencyEditor(taskId);
+    }
+
+    return;
+  }
+
+  if (action === 'cancel-deps') {
+    cancelTaskDependencyEditor(taskId);
+    return;
+  }
+
+  if (action === 'save-deps') {
+    await saveTaskDependencies(taskId);
+  }
+});
+
+structureFilter?.addEventListener('change', () => {
+  structureFilterMode = structureFilter.value || 'all';
+  renderTasks();
+});
+
+structureList?.addEventListener('click', (event) => {
+  const actionButton = event.target.closest('button[data-action]');
+
+  if (!actionButton) {
+    return;
+  }
+
+  const taskId = actionButton.dataset.taskId;
+  const action = actionButton.dataset.action;
+
+  if (!taskId) {
+    return;
+  }
+
+  if (action === 'goto-task') {
+    if (!scrollToTaskCard(taskId)) {
+      appendLog('未找到对应任务卡区域。', 'warn');
+    }
+    return;
+  }
+
+  if (action === 'edit-deps') {
+    openTaskDependencyEditor(taskId);
+    scrollToTaskCard(taskId);
   }
 });
 selectProjectButton.addEventListener('click', selectProject);

@@ -6,7 +6,14 @@ import { URL } from 'node:url';
 import WebSocket, { WebSocketServer } from 'ws';
 
 import { buildExecutorCommand, listExecutorProfiles, normalizeExecutorParams } from './lib/executor-profiles.mjs';
-import { readCurrentProject, saveCurrentProject, listTasks, createTask, getTask, updateTask } from './lib/project-store.mjs';
+import {
+  readCurrentProject,
+  saveCurrentProject,
+  listTasks,
+  createTask,
+  getTask,
+  updateTask,
+} from './lib/project-store.mjs';
 import { ensureDirectoryPath, selectProjectFolder } from './lib/folder-dialog.mjs';
 import { createTerminalSessionManager } from './lib/terminal-session-manager.mjs';
 
@@ -52,6 +59,29 @@ function detectTaskWaitingState(output) {
     'permission',
     'allow',
   ].some((keyword) => text.includes(keyword));
+}
+
+function buildPrimaryNoteAttachment(task, content) {
+  const trimmedContent = String(content ?? '').trim();
+
+  if (!trimmedContent) {
+    return null;
+  }
+
+  const existingNoteAttachment = Array.isArray(task?.attachments)
+    ? task.attachments.find((attachment) => attachment.type === 'note') ?? null
+    : null;
+  const timestamp = now();
+
+  return {
+    id: existingNoteAttachment?.id,
+    type: 'note',
+    relation: 'adjacent',
+    order: 0,
+    content: trimmedContent,
+    createdAt: existingNoteAttachment?.createdAt ?? task.createdAt ?? timestamp,
+    updatedAt: timestamp,
+  };
 }
 
 async function syncLinkedTaskWithSession(session, extras = {}) {
@@ -313,20 +343,84 @@ async function handleTaskNoteUpdate(request, response) {
     }
 
     const taskNoteContent = body.content == null ? '' : String(body.content);
-    const trimmedContent = taskNoteContent.trim();
+    const nextPrimaryNoteAttachment = buildPrimaryNoteAttachment(task, taskNoteContent);
+    const attachments = Array.isArray(task.attachments)
+      ? task.attachments.filter((attachment) => attachment.type !== 'note')
+      : [];
+
+    if (nextPrimaryNoteAttachment) {
+      attachments.unshift(nextPrimaryNoteAttachment);
+    }
+
     const updatedTask = await updateTask(task.id, {
-      note: trimmedContent
-        ? {
-            content: trimmedContent,
-            updatedAt: now(),
-          }
-        : null,
+      attachments,
     });
 
     sendJson(response, 200, { task: updatedTask });
   } catch (error) {
     console.error(error);
     sendJson(response, 500, { error: error.message || 'Failed to save task note.' });
+  }
+}
+
+async function handleTaskDependenciesUpdate(request, response) {
+  try {
+    const body = await readBody(request);
+    const taskId = String(body.taskId ?? '').trim();
+
+    if (!taskId) {
+      sendJson(response, 400, { error: 'taskId is required.' });
+      return;
+    }
+
+    const task = await getTask(taskId);
+
+    if (!task) {
+      sendJson(response, 404, { error: 'Task not found.' });
+      return;
+    }
+
+    const allTasks = await listTasks();
+    const allowedIds = new Set(allTasks.map((item) => item.id));
+    const rawDependencyIds = Array.isArray(body.dependencyIds) ? body.dependencyIds : [];
+    const dependencyIds = [];
+    const seen = new Set();
+
+    for (const item of rawDependencyIds) {
+      const id = String(item ?? '').trim();
+
+      if (!id) {
+        continue;
+      }
+
+      if (id === taskId) {
+        continue;
+      }
+
+      if (!allowedIds.has(id)) {
+        continue;
+      }
+
+      if (seen.has(id)) {
+        continue;
+      }
+
+      seen.add(id);
+      dependencyIds.push(id);
+
+      if (dependencyIds.length >= 50) {
+        break;
+      }
+    }
+
+    const updatedTask = await updateTask(taskId, {
+      dependencyIds,
+    });
+
+    sendJson(response, 200, { task: updatedTask });
+  } catch (error) {
+    console.error(error);
+    sendJson(response, 500, { error: error.message || 'Failed to update task dependencies.' });
   }
 }
 
@@ -534,6 +628,11 @@ async function requestHandler(request, response) {
 
   if (request.method === 'POST' && requestUrl.pathname === '/api/tasks/note') {
     await handleTaskNoteUpdate(request, response);
+    return;
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/tasks/dependencies') {
+    await handleTaskDependenciesUpdate(request, response);
     return;
   }
 
