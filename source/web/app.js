@@ -31,6 +31,10 @@ const createTaskButton = document.querySelector('#create-task');
 const structureFilter = document.querySelector('#structure-filter');
 const structureList = document.querySelector('#structure-list');
 const structureFocusOnlyToggle = document.querySelector('#structure-focus-only');
+const overviewProject = document.querySelector('#overview-project');
+const overviewTaskTotal = document.querySelector('#overview-task-total');
+const overviewTaskActive = document.querySelector('#overview-task-active');
+const overviewSession = document.querySelector('#overview-session');
 
 const { Terminal } = window;
 const FitAddonCtor = window.FitAddon?.FitAddon;
@@ -611,6 +615,28 @@ function summarizeTasks() {
   return counts;
 }
 
+function renderWorkspaceOverview() {
+  if (overviewProject) {
+    overviewProject.textContent = currentProject?.name || '未选择工程';
+  }
+
+  const summary = summarizeTasks();
+
+  if (overviewTaskTotal) {
+    overviewTaskTotal.textContent = String(summary.total);
+  }
+
+  if (overviewTaskActive) {
+    overviewTaskActive.textContent = `${summary.running} 运行中 / ${summary.waiting} 等待`;
+  }
+
+  if (overviewSession) {
+    overviewSession.textContent = currentSession
+      ? `${currentSession.status} · ${currentSession.id.slice(0, 8)}`
+      : '未创建';
+  }
+}
+
 function syncTaskExecutorOptions() {
   if (!taskExecutorSelect) {
     return;
@@ -645,6 +671,8 @@ function renderTasks() {
   if (!taskList || !tasksSummary) {
     return;
   }
+
+  renderWorkspaceOverview();
 
   if (structureFocusOnlyToggle) {
     structureFocusOnlyToggle.checked = structureFocusOnly;
@@ -1307,6 +1335,7 @@ function updateExecutorControls() {
 function renderProject(project) {
   clearExecutorStatusLock();
   currentProject = project ?? null;
+  renderWorkspaceOverview();
 
   if (!project) {
     projectPath.textContent = '尚未选择工程目录';
@@ -1337,6 +1366,7 @@ function renderProject(project) {
 function renderSession(session) {
   clearExecutorStatusLock();
   currentSession = session ?? null;
+  renderWorkspaceOverview();
 
   if (!session) {
     terminalSession.textContent = '未创建';

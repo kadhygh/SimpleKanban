@@ -101,6 +101,26 @@ pre {
   color: var(--accent-hover);
 }
 
+.workspace-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.overview-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--panel-border);
+  background: rgba(12, 14, 19, 0.72);
+}
+
+.overview-value {
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
 .panel-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
