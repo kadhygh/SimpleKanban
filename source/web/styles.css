@@ -656,6 +656,15 @@ textarea:disabled {
   align-items: start;
 }
 
+.task-cluster.is-selected .task-primary-card {
+  border-color: rgba(124, 156, 255, 0.72);
+  box-shadow: 0 0 0 1px rgba(124, 156, 255, 0.18), 0 16px 32px rgba(0, 0, 0, 0.24);
+}
+
+.task-cluster.is-deep-linked .task-primary-card {
+  animation: task-card-pulse 1.4s ease;
+}
+
 .task-card {
   display: grid;
   gap: 14px;
@@ -663,10 +672,12 @@ textarea:disabled {
   border-radius: 16px;
   border: 1px solid #232836;
   background: #0c0e13;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
 .task-primary-card {
   min-width: 0;
+  cursor: pointer;
 }
 
 .task-adjacent-lane {
@@ -884,6 +895,20 @@ textarea:disabled {
 
 .xterm {
   height: 100%;
+}
+
+@keyframes task-card-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(124, 156, 255, 0.42);
+  }
+
+  45% {
+    box-shadow: 0 0 0 10px rgba(124, 156, 255, 0.12);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(124, 156, 255, 0);
+  }
 }
 
 @media (max-width: 900px) {

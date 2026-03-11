@@ -35,6 +35,7 @@ const overviewProject = document.querySelector('#overview-project');
 const overviewTaskTotal = document.querySelector('#overview-task-total');
 const overviewTaskActive = document.querySelector('#overview-task-active');
 const overviewSession = document.querySelector('#overview-session');
+const canvasNavLink = document.querySelector('#canvas-nav-link');
 
 const { Terminal } = window;
 const FitAddonCtor = window.FitAddon?.FitAddon;
@@ -61,6 +62,8 @@ let structureFilterMode = 'all';
 const structureRowState = new Map();
 let structureSelectedTaskId = null;
 let structureFocusOnly = false;
+const taskHighlightTimers = new WeakMap();
+let pendingTaskIdFromUrl = getTaskIdFromUrl();
 
 const TASK_STATUS_LABELS = {
   idle: '未运行',
@@ -106,6 +109,49 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function normalizeTaskId(value) {
+  const normalized = String(value ?? '').trim();
+  return normalized || null;
+}
+
+function getTaskIdFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  return normalizeTaskId(params.get('task'));
+}
+
+function buildCanvasTaskHref(taskId) {
+  const normalizedTaskId = normalizeTaskId(taskId);
+
+  if (!normalizedTaskId) {
+    return '/canvas.html';
+  }
+
+  return `/canvas.html?task=${encodeURIComponent(normalizedTaskId)}`;
+}
+
+function syncWorkspaceTaskQuery(taskId) {
+  const url = new URL(window.location.href);
+  const normalizedTaskId = normalizeTaskId(taskId);
+
+  if (normalizedTaskId) {
+    url.searchParams.set('task', normalizedTaskId);
+  } else {
+    url.searchParams.delete('task');
+  }
+
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+
+  if (nextUrl !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+    window.history.replaceState(null, '', nextUrl);
+  }
+}
+
+function syncCanvasNavLink() {
+  if (canvasNavLink) {
+    canvasNavLink.href = buildCanvasTaskHref(structureSelectedTaskId ?? pendingTaskIdFromUrl);
+  }
 }
 
 function truncateText(value, maxLength = 140) {
@@ -559,6 +605,81 @@ function scrollToTaskCard(taskId) {
   return true;
 }
 
+function highlightTaskCard(taskId) {
+  const selector = `.task-cluster[data-task-id="${CSS.escape(taskId)}"]`;
+  const target = document.querySelector(selector);
+
+  if (!target) {
+    return false;
+  }
+
+  target.classList.remove('is-deep-linked');
+  // Force restart of the animation when navigating to the same task repeatedly.
+  void target.offsetWidth;
+  target.classList.add('is-deep-linked');
+
+  const existingTimer = taskHighlightTimers.get(target);
+  if (existingTimer) {
+    window.clearTimeout(existingTimer);
+  }
+
+  const timerId = window.setTimeout(() => {
+    target.classList.remove('is-deep-linked');
+    taskHighlightTimers.delete(target);
+  }, 1800);
+
+  taskHighlightTimers.set(target, timerId);
+  return true;
+}
+
+function setSelectedTask(taskId, { scroll = false, highlight = false, syncUrl = true } = {}) {
+  const normalizedTaskId = normalizeTaskId(taskId);
+  const nextTaskId = normalizedTaskId && tasks.some((task) => task.id === normalizedTaskId)
+    ? normalizedTaskId
+    : null;
+  const changed = structureSelectedTaskId !== nextTaskId;
+
+  structureSelectedTaskId = nextTaskId;
+
+  if (syncUrl) {
+    syncWorkspaceTaskQuery(nextTaskId);
+  }
+
+  syncCanvasNavLink();
+
+  if (changed) {
+    renderTasks();
+  }
+
+  if (scroll && nextTaskId) {
+    scrollToTaskCard(nextTaskId);
+  }
+
+  if (highlight && nextTaskId) {
+    highlightTaskCard(nextTaskId);
+  }
+
+  return nextTaskId;
+}
+
+function applyPendingTaskSelectionFromUrl() {
+  if (!pendingTaskIdFromUrl) {
+    return false;
+  }
+
+  const taskId = pendingTaskIdFromUrl;
+  pendingTaskIdFromUrl = null;
+
+  if (!tasks.some((task) => task.id === taskId)) {
+    syncWorkspaceTaskQuery(null);
+    syncCanvasNavLink();
+    return false;
+  }
+
+  setSelectedTask(taskId, { scroll: true, highlight: true });
+  return true;
+}
+
 function getTaskNoteEditorState(task) {
   const existing = noteEditorState.get(task.id);
 
@@ -672,6 +793,12 @@ function renderTasks() {
     return;
   }
 
+  if (structureSelectedTaskId && !tasks.some((task) => task.id === structureSelectedTaskId)) {
+    structureSelectedTaskId = null;
+    syncWorkspaceTaskQuery(null);
+  }
+
+  syncCanvasNavLink();
   renderWorkspaceOverview();
 
   if (structureFocusOnlyToggle) {
@@ -753,7 +880,7 @@ function renderTasks() {
     const blockingDeps = getBlockingDependencyTitles(depIds, depIndex);
 
     return `
-      <article class="task-cluster" data-task-id="${escapeHtml(task.id)}">
+      <article class="task-cluster ${task.id === structureSelectedTaskId ? 'is-selected' : ''}" data-task-id="${escapeHtml(task.id)}">
         <section class="task-card task-primary-card">
           <div class="task-card-header">
             <div class="task-card-title">${escapeHtml(task.title)}</div>
@@ -800,6 +927,7 @@ function renderTasks() {
           <div class="task-card-actions">
             <button class="primary-button" data-action="run-task" data-task-id="${escapeHtml(task.id)}" ${canRun ? '' : 'disabled'}>运行</button>
             <button class="secondary-button" data-action="focus-terminal" data-task-id="${escapeHtml(task.id)}">查看终端</button>
+            <button class="secondary-button" data-action="open-canvas" data-task-id="${escapeHtml(task.id)}">在 Canvas 中定位</button>
           </div>
         </section>
 
@@ -950,6 +1078,7 @@ async function loadTasks() {
     const payload = await response.json();
     tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
     renderTasks();
+    applyPendingTaskSelectionFromUrl();
   } catch (error) {
     appendLog(`读取任务列表失败：${error.message}`, 'warn');
     tasks = [];
@@ -1815,8 +1944,22 @@ taskList?.addEventListener('input', (event) => {
 });
 taskList?.addEventListener('click', async (event) => {
   const actionButton = event.target.closest('button[data-action]');
+  const passiveControl = event.target.closest('a, input, textarea, select, label');
+  const primaryCard = event.target.closest('.task-primary-card');
 
   if (!actionButton) {
+    if (passiveControl || !primaryCard) {
+      return;
+    }
+
+    const cluster = primaryCard.closest('.task-cluster');
+    const taskId = cluster?.dataset.taskId;
+
+    if (!taskId) {
+      return;
+    }
+
+    setSelectedTask(taskId);
     return;
   }
 
@@ -1831,6 +1974,11 @@ taskList?.addEventListener('click', async (event) => {
   if (action === 'focus-terminal') {
     const task = tasks.find((item) => item.id === taskId) ?? null;
     focusTerminalPanel(task);
+    return;
+  }
+
+  if (action === 'open-canvas') {
+    window.location.href = buildCanvasTaskHref(taskId);
     return;
   }
 
@@ -1903,8 +2051,7 @@ structureList?.addEventListener('click', (event) => {
       return;
     }
 
-    structureSelectedTaskId = structureSelectedTaskId === nextId ? null : nextId;
-    renderTasks();
+    setSelectedTask(structureSelectedTaskId === nextId ? null : nextId);
     return;
   }
 
@@ -1917,9 +2064,7 @@ structureList?.addEventListener('click', (event) => {
 
   if (action === 'goto-task') {
     // Keep selection in sync with navigation intent.
-    structureSelectedTaskId = taskId;
-    renderTasks();
-    if (!scrollToTaskCard(taskId)) {
+    if (!setSelectedTask(taskId, { scroll: true, highlight: true })) {
       appendLog('未找到对应任务卡区域。', 'warn');
     }
     return;

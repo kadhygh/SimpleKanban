@@ -8,6 +8,7 @@ const canvasScroll = document.querySelector('#canvas-scroll');
 const canvasBoard = document.querySelector('#canvas-board');
 const canvasLinks = document.querySelector('#canvas-links');
 const canvasDetail = document.querySelector('#canvas-detail');
+const workspaceLink = document.querySelector('#canvas-workspace-link');
 
 const STATUS_LABELS = {
   idle: '未运行',
@@ -26,7 +27,49 @@ const BOARD_PADDING_Y = 48;
 
 let currentProject = null;
 let tasks = [];
-let selectedTaskId = null;
+let selectedTaskId = readSelectedTaskIdFromUrl();
+
+function readSelectedTaskIdFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const taskId = String(params.get('task') ?? '').trim();
+  return taskId || null;
+}
+
+function buildWorkspaceHref(taskId = selectedTaskId) {
+  const url = new URL('/index.html', window.location.origin);
+
+  if (taskId) {
+    url.searchParams.set('task', taskId);
+  }
+
+  url.hash = 'tasks-panel';
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function syncWorkspaceLink() {
+  if (workspaceLink) {
+    workspaceLink.href = buildWorkspaceHref();
+  }
+}
+
+function syncSelectedTaskToUrl() {
+  const nextUrl = new URL(window.location.href);
+
+  if (selectedTaskId) {
+    nextUrl.searchParams.set('task', selectedTaskId);
+  } else {
+    nextUrl.searchParams.delete('task');
+  }
+
+  const nextLocation = `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`;
+  const currentLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+
+  if (nextLocation !== currentLocation) {
+    window.history.replaceState({}, '', nextLocation);
+  }
+
+  syncWorkspaceLink();
+}
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -284,7 +327,7 @@ function renderDetail(layout) {
     </section>
     <section class="detail-card">
       <div class="detail-actions">
-        <a class="ghost-link" href="/index.html#tasks-panel">回到工作台任务区</a>
+        <a class="ghost-link" href="${escapeHtml(buildWorkspaceHref(task.id))}">回到工作台任务区</a>
       </div>
     </section>
   `;
@@ -379,6 +422,8 @@ function renderCanvas() {
   renderSummary();
 
   if (tasks.length === 0) {
+    selectedTaskId = null;
+    syncSelectedTaskToUrl();
     canvasEmpty.hidden = false;
     canvasScroll.hidden = true;
     canvasDetail.innerHTML = '<div class="detail-placeholder">当前没有任务可投影。先回工作台创建一些任务，再来观察 canvas 结构。</div>';
@@ -391,6 +436,8 @@ function renderCanvas() {
   if (!tasks.some((task) => task.id === selectedTaskId)) {
     selectedTaskId = tasks[0].id;
   }
+
+  syncSelectedTaskToUrl();
 
   const layout = buildLayout(tasks);
   renderNodes(layout);
@@ -423,6 +470,7 @@ async function loadData() {
     tasks = Array.isArray(tasksPayload.tasks) ? tasksPayload.tasks : [];
     renderCanvas();
   } catch (error) {
+    syncWorkspaceLink();
     canvasEmpty.hidden = false;
     canvasScroll.hidden = true;
     canvasEmpty.textContent = error.message || '加载 canvas 数据失败。';
@@ -438,6 +486,8 @@ refreshButton?.addEventListener('click', () => {
     console.error(error);
   });
 });
+
+syncWorkspaceLink();
 
 loadData().catch((error) => {
   console.error(error);
