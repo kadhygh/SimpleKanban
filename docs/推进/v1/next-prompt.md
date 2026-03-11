@@ -17,13 +17,18 @@
 当前状态：
 - M1 已完成，并已由用户本人验证通过。
 - M2 当前节点已完成，并已由用户本人验证通过。
-- 已有本地 Node 服务、项目选择接口、网页终端、终端刷新恢复、最小执行器注入、单参数输入、执行器状态栏。
-- 当前已经不再只是“接终端”，而是开始转向“结构层 / 记忆层 / 可视化承载”的下一阶段。
+- M4（执行器模型）当前节点已完成，并已由用户本人验证通过。
+- M5（TaskCard 执行闭环）当前节点已完成，并已由用户本人验证通过。
+- M3（会话可信性）当前节点已完成：服务重启后残留 `running/waiting` 任务会被标记为 `lost`，避免“假运行”。
+- 结构层当前节点已完成：Task 支持 `dependencyIds`，结构视图可选中高亮、focus-only 子图，并提示环依赖。
+- 记忆层（memory）当前封存；产物层当前不考虑（后续有需求再补）。
 - 用户这几天的真实体感是：CLI 执行很强，但长期上下文与整体结构更需要图形化表达，因此 `docs/项目定位.md` 非常关键。
 
 当前代码位置：
 - `source/server/server.mjs`
 - `source/server/lib/project-store.mjs`
+- `source/server/lib/terminal-session-manager.mjs`
+- `source/server/lib/executor-profiles.mjs`
 - `source/server/lib/folder-dialog.mjs`
 - `source/web/index.html`
 - `source/web/app.js`
@@ -41,7 +46,7 @@
 
 实现约束：
 - 继续保持单机、单项目、单活跃终端
-- 不要提前引入 TaskCard 业务逻辑
+- 依赖关系当前只做结构展示，不做运行约束（保留未来加 gating 的扩展点）
 - 不要提前引入账号、多人协作、远程服务、worktree
 - 外部 terminal 不是当前主路径，优先网页托管终端
 - `docs/rescource` 里的 vibekanban 分析可以参考，但不必照搬
@@ -63,4 +68,4 @@
 
 - 如果下一次对话的目标仍然是继续开发，直接复制上面的提示词即可。
 - 如果下一次对话只想讨论方案，也建议先让助手阅读 `docs/推进/v1/交接.md`。
-- 如果后续进入 `M3` 或更后面的阶段，可以在这个文件基础上继续更新提示词。
+- 如果后续进入新阶段（例如产物层、记忆层、页面重构），可以在这个文件基础上继续更新提示词。
