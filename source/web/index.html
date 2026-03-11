@@ -3,20 +3,29 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SimpleKanban M2</title>
+    <title>SimpleKanban Workspace</title>
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/vendor/xterm.css" />
   </head>
   <body>
     <main class="app-shell">
       <section class="hero-card">
-        <p class="eyebrow">SimpleKanban · M2</p>
-        <h1>网页终端最小闭环</h1>
-        <p class="subtitle">在保留本地项目绑定的基础上，继续打通“网页终端展示 -> 双向输入输出 -> resize”这条最小链路。</p>
+        <p class="eyebrow">SimpleKanban · Local Workspace</p>
+        <h1>任务、终端与结构视图</h1>
+        <p class="subtitle">当前页面已经不是单纯的 M2 终端演示，而是一个重构前的工作台壳：项目绑定、TaskCard、结构视图、网页终端与执行器注入都先落在同一页里。</p>
       </section>
 
+      <nav class="workspace-nav" aria-label="页面导航">
+        <a class="workspace-nav-link" href="#project-panel">项目</a>
+        <a class="workspace-nav-link" href="#service-panel">服务</a>
+        <a class="workspace-nav-link" href="#status-panel">日志</a>
+        <a class="workspace-nav-link" href="#tasks-panel">任务</a>
+        <a class="workspace-nav-link" href="#terminal-panel">终端</a>
+        <a class="workspace-nav-link" href="#executor-panel">执行器</a>
+      </nav>
+
       <section class="panel-grid">
-        <article class="panel">
+        <article id="project-panel" class="panel">
           <div class="panel-head">
             <h2>当前项目</h2>
             <button id="refresh-project" class="secondary-button">刷新</button>
@@ -33,7 +42,7 @@
           </div>
         </article>
 
-        <article class="panel">
+        <article id="service-panel" class="panel">
           <div class="panel-head">
             <h2>服务状态</h2>
           </div>
@@ -49,13 +58,13 @@
             </div>
             <div>
               <span class="label">说明</span>
-              <span class="hint">M1 已通过人工验证；M2 当前正在接入网页终端与最小执行器注入。</span>
+              <span class="hint">当前页已承载项目、任务、结构、终端与执行器；后续若重构页面，应以这些区块为基础重新组织信息架构。</span>
             </div>
           </div>
         </article>
       </section>
 
-      <section class="panel log-panel">
+      <section id="status-panel" class="panel log-panel">
         <div class="panel-head">
           <h2>状态输出</h2>
         </div>

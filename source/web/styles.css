@@ -11,6 +11,10 @@
   --warn: #ffce73;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -72,6 +76,29 @@ pre {
   margin-top: 12px;
   color: var(--muted);
   line-height: 1.6;
+}
+
+.workspace-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.workspace-nav-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border);
+  background: rgba(23, 26, 34, 0.92);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.workspace-nav-link:hover {
+  border-color: var(--accent);
+  color: var(--accent-hover);
 }
 
 .panel-grid {
