@@ -10,12 +10,18 @@ const canvasLinks = document.querySelector('#canvas-links');
 const canvasDetail = document.querySelector('#canvas-detail');
 const workspaceLink = document.querySelector('#canvas-workspace-link');
 
-const STATUS_LABELS = {
+const RUNTIME_STATUS_LABELS = {
   idle: '未运行',
   running: '运行中',
   waiting: '等待处理',
   lost: '会话丢失',
   ended: '已结束',
+};
+
+const WORKFLOW_STATUS_LABELS = {
+  todo: '待办',
+  doing: '推进中',
+  done: '已完成',
 };
 
 const NODE_WIDTH = 260;
@@ -116,8 +122,20 @@ function normalizeDependencyIds(value) {
   return normalized;
 }
 
-function formatStatus(status) {
-  return STATUS_LABELS[status] ?? STATUS_LABELS.idle;
+function getTaskRuntimeStatus(task) {
+  return task?.runtimeStatus ?? task?.status ?? 'idle';
+}
+
+function getTaskWorkflowStatus(task) {
+  return task?.workflowStatus ?? 'todo';
+}
+
+function formatRuntimeStatus(status) {
+  return RUNTIME_STATUS_LABELS[status] ?? RUNTIME_STATUS_LABELS.idle;
+}
+
+function formatWorkflowStatus(status) {
+  return WORKFLOW_STATUS_LABELS[status] ?? WORKFLOW_STATUS_LABELS.todo;
 }
 
 function formatTime(value) {
@@ -136,16 +154,16 @@ function formatTime(value) {
 function summarizeTasks() {
   const counts = {
     total: tasks.length,
-    running: 0,
+    doing: 0,
     waiting: 0,
   };
 
   for (const task of tasks) {
-    if (task.status === 'running') {
-      counts.running += 1;
+    if (getTaskWorkflowStatus(task) === 'doing') {
+      counts.doing += 1;
     }
 
-    if (task.status === 'waiting') {
+    if (getTaskRuntimeStatus(task) === 'waiting') {
       counts.waiting += 1;
     }
   }
@@ -265,7 +283,7 @@ function renderSummary() {
 
   summaryProject.textContent = currentProject?.name || '未选择工程';
   summaryTotal.textContent = String(counts.total);
-  summaryActive.textContent = `${counts.running} 运行中 / ${counts.waiting} 等待`;
+  summaryActive.textContent = `${counts.doing} 推进中 / ${counts.waiting} 等待处理`;
   summarySelection.textContent = selectedTask?.title || '未选择节点';
 }
 
@@ -296,8 +314,12 @@ function renderDetail(layout) {
     <section class="detail-card">
       <div class="detail-grid">
         <div>
-          <span class="label">状态</span>
-          <strong>${escapeHtml(formatStatus(task.status))}</strong>
+          <span class="label">人工推进</span>
+          <strong>${escapeHtml(formatWorkflowStatus(getTaskWorkflowStatus(task)))}</strong>
+        </div>
+        <div>
+          <span class="label">运行态</span>
+          <strong>${escapeHtml(formatRuntimeStatus(getTaskRuntimeStatus(task)))}</strong>
         </div>
         <div>
           <span class="label">执行器</span>
@@ -387,10 +409,14 @@ function renderNodes(layout) {
       >
         <div class="canvas-node-header">
           <strong class="canvas-node-title">${escapeHtml(task.title)}</strong>
-          <span class="canvas-status ${escapeHtml(task.status)}">${escapeHtml(formatStatus(task.status))}</span>
+          <span class="workflow-pill ${escapeHtml(getTaskWorkflowStatus(task))}">${escapeHtml(formatWorkflowStatus(getTaskWorkflowStatus(task)))}</span>
         </div>
         <p class="canvas-node-desc">${escapeHtml(truncateText(task.description))}</p>
         <div class="canvas-node-meta">
+          <div>
+            <span class="label">运行态</span>
+            <strong class="canvas-runtime ${escapeHtml(getTaskRuntimeStatus(task))}">${escapeHtml(formatRuntimeStatus(getTaskRuntimeStatus(task)))}</strong>
+          </div>
           <div>
             <span class="label">依赖</span>
             <strong>${depCount}</strong>

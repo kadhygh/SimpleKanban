@@ -239,7 +239,7 @@ p {
   line-height: 1.4;
 }
 
-.canvas-status {
+.workflow-pill {
   display: inline-flex;
   align-items: center;
   min-height: 28px;
@@ -251,17 +251,20 @@ p {
   white-space: nowrap;
 }
 
-.canvas-status.running {
+.workflow-pill.todo {
+  color: var(--text);
+}
+
+.workflow-pill.doing {
+  border-color: rgba(95, 179, 255, 0.45);
+  background: rgba(95, 179, 255, 0.14);
+  color: var(--accent-strong);
+}
+
+.workflow-pill.done {
+  border-color: rgba(115, 217, 156, 0.38);
+  background: rgba(115, 217, 156, 0.12);
   color: var(--success);
-}
-
-.canvas-status.waiting,
-.canvas-status.lost {
-  color: var(--warn);
-}
-
-.canvas-status.ended {
-  color: var(--danger);
 }
 
 .canvas-node-desc {
@@ -273,7 +276,7 @@ p {
 
 .canvas-node-meta {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-top: 14px;
 }
@@ -282,6 +285,19 @@ p {
   display: block;
   margin-top: 4px;
   font-size: 0.95rem;
+}
+
+.canvas-runtime.running {
+  color: var(--success);
+}
+
+.canvas-runtime.waiting,
+.canvas-runtime.lost {
+  color: var(--warn);
+}
+
+.canvas-runtime.ended {
+  color: var(--danger);
 }
 
 .canvas-detail {

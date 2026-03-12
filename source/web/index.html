@@ -3,16 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SimpleKanban Workspace</title>
+    <title>SimpleKanban List Workspace</title>
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/vendor/xterm.css" />
   </head>
   <body>
     <main class="app-shell">
       <section class="hero-card">
-        <p class="eyebrow">SimpleKanban · Local Workspace</p>
-        <h1>任务、终端与结构视图</h1>
-        <p class="subtitle">当前页面已经不是单纯的 M2 终端演示，而是一个重构前的工作台壳：项目绑定、TaskCard、结构视图、网页终端与执行器注入都先落在同一页里。</p>
+        <p class="eyebrow">SimpleKanban · ListWorkspace</p>
+        <h1>ListWorkspace</h1>
+        <p class="subtitle">v2 的第一刀先把主页收口成监控和筛选面：这里负责项目绑定、TaskCard、运行态观察和终端入口；`CanvasWorkspace` 继续负责关系观察与空间化理解。</p>
       </section>
 
       <nav class="workspace-nav" aria-label="页面导航">
@@ -20,7 +20,7 @@
         <a class="workspace-nav-link" href="#service-panel">服务</a>
         <a class="workspace-nav-link" href="#status-panel">日志</a>
         <a class="workspace-nav-link" href="#tasks-panel">任务</a>
-        <a id="canvas-nav-link" class="workspace-nav-link" href="/canvas.html">Canvas</a>
+        <a id="canvas-nav-link" class="workspace-nav-link" href="/canvas.html">CanvasWorkspace</a>
         <a class="workspace-nav-link" href="#terminal-panel">终端</a>
         <a class="workspace-nav-link" href="#executor-panel">执行器</a>
       </nav>
@@ -35,8 +35,8 @@
           <strong id="overview-task-total" class="overview-value">0</strong>
         </article>
         <article class="overview-card">
-          <span class="label">活跃任务</span>
-          <strong id="overview-task-active" class="overview-value">0 运行中 / 0 等待</strong>
+          <span class="label">推进与响应</span>
+          <strong id="overview-task-active" class="overview-value">0 推进中 / 0 等待处理</strong>
         </article>
         <article class="overview-card">
           <span class="label">终端会话</span>
@@ -94,8 +94,8 @@
       <section id="tasks-panel" class="panel tasks-panel">
         <div class="panel-head tasks-head">
           <div>
-            <h2>任务区</h2>
-            <p class="hint tasks-subtitle">先把 TaskCard 变成可运行、可追踪、可回到终端的对象。</p>
+            <h2>TaskCard 列表</h2>
+            <p class="hint tasks-subtitle">当前主页作为 `ListWorkspace`，先把人工推进状态、运行态和依赖关系放在同一处可监控。</p>
           </div>
 
           <div class="tasks-actions">
@@ -119,6 +119,15 @@
               <span class="label">执行器</span>
               <select id="task-executor-select" class="executor-select"></select>
             </label>
+
+            <label class="task-field">
+              <span class="label">推进状态</span>
+              <select id="task-workflow-status" class="executor-select">
+                <option value="todo">todo</option>
+                <option value="doing">doing</option>
+                <option value="done">done</option>
+              </select>
+            </label>
           </div>
 
           <div class="task-form-actions">
@@ -127,14 +136,14 @@
         </form>
 
         <div class="tasks-summary-note">
-          <span class="hint">当前阶段所有 TaskCard 共享同一个活跃终端；运行新任务会复用当前终端并切换当前绑定任务。</span>
+          <span class="hint">当前阶段所有 TaskCard 仍共享一个活跃终端；v2 先把“人工推进状态”和“运行态”分离，后续再接多 Session。</span>
         </div>
 
         <section class="task-structure-card" aria-label="任务结构视图">
           <div class="task-structure-head">
             <div>
-              <h3 class="task-structure-title">结构视图</h3>
-              <p class="hint">当前版本仅展示依赖关系，不阻止运行。后续如需运行约束，可复用“未结束依赖”判断。</p>
+              <h3 class="task-structure-title">结构监控</h3>
+              <p class="hint">`ListWorkspace` 中保留结构区作为监控和诊断入口；主关系观察面继续放在 `CanvasWorkspace`。</p>
             </div>
 
             <div class="task-structure-controls">
@@ -167,8 +176,8 @@
       <section id="terminal-panel" class="panel terminal-panel">
         <div class="panel-head terminal-head">
           <div>
-            <h2>网页终端</h2>
-            <p class="hint terminal-subtitle">当前阶段仅支持单机、单项目、单活跃终端。</p>
+            <h2>Session Terminal</h2>
+            <p class="hint terminal-subtitle">当前阶段仍是单机、单项目、单活跃终端；下一步会升级为多 Session Registry。</p>
           </div>
 
           <div class="terminal-actions">

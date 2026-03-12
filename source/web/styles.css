@@ -688,7 +688,6 @@ textarea:disabled {
 
 .task-card-header,
 .task-card-meta,
-.task-card-status,
 .task-note-card {
   display: grid;
   gap: 8px;
@@ -843,11 +842,53 @@ textarea:disabled {
   gap: 12px;
 }
 
+.task-card-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.task-status-block,
+.task-workflow-control {
+  display: grid;
+  gap: 8px;
+}
+
 .task-status-row {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.workflow-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.2;
+}
+
+.workflow-pill.todo {
+  border-color: rgba(167, 175, 196, 0.35);
+  color: #d5dced;
+}
+
+.workflow-pill.doing {
+  border-color: rgba(95, 179, 255, 0.45);
+  background: rgba(95, 179, 255, 0.14);
+  color: #cde3ff;
+}
+
+.workflow-pill.done {
+  border-color: rgba(117, 211, 143, 0.4);
+  background: rgba(117, 211, 143, 0.14);
+  color: #b8f1c6;
 }
 
 .status-dot {
@@ -875,6 +916,10 @@ textarea:disabled {
 
 .status-dot.ended {
   background: #f08a8a;
+}
+
+.task-workflow-select {
+  min-width: 0;
 }
 
 .task-empty {

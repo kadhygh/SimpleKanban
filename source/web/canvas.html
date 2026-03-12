@@ -3,20 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SimpleKanban Canvas</title>
+    <title>SimpleKanban Canvas Workspace</title>
     <link rel="stylesheet" href="/canvas.css" />
   </head>
   <body>
     <main class="canvas-shell">
       <header class="canvas-hero">
         <div>
-          <p class="canvas-eyebrow">SimpleKanban · Canvas Spike</p>
-          <h1>Task Canvas</h1>
-          <p class="canvas-subtitle">这一页只验证一件事：把现有 Task 投影成节点后，是否比列表页更适合作为后续主界面。</p>
+          <p class="canvas-eyebrow">SimpleKanban · CanvasWorkspace</p>
+          <h1>CanvasWorkspace</h1>
+          <p class="canvas-subtitle">这一页继续承载关系观察和空间化理解。v2 当前不把它做成完整白板，而是先和 `ListWorkspace` 形成清晰分工。</p>
         </div>
 
         <div class="canvas-hero-actions">
-          <a id="canvas-workspace-link" class="ghost-link" href="/index.html#tasks-panel">返回工作台</a>
+          <a id="canvas-workspace-link" class="ghost-link" href="/index.html#tasks-panel">返回 ListWorkspace</a>
           <button id="refresh-canvas" class="primary-button" type="button">刷新数据</button>
         </div>
       </header>
@@ -45,7 +45,7 @@
           <div class="panel-head">
             <div>
               <h2>节点画布</h2>
-              <p class="hint">当前采用自动布局：按依赖层级从左到右投影。现在只做观察与选中，不做拖拽编辑。</p>
+              <p class="hint">当前采用自动布局：按依赖层级从左到右投影。现在只做观察、选中和详情联动，不做拖拽编辑。</p>
             </div>
           </div>
 
@@ -61,7 +61,7 @@
           <div class="panel-head">
             <div>
               <h2>节点详情</h2>
-              <p class="hint">这里先承载选中节点的说明、依赖和最近状态，后续再决定这些信息是否回流到统一详情面板。</p>
+              <p class="hint">这里先承载选中节点的人工推进状态、运行态、依赖和说明，后续再决定哪些内容需要成为统一详情面板。</p>
             </div>
           </div>
 

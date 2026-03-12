@@ -25,6 +25,7 @@ const taskForm = document.querySelector('#task-form');
 const taskTitleInput = document.querySelector('#task-title');
 const taskDescriptionInput = document.querySelector('#task-description');
 const taskExecutorSelect = document.querySelector('#task-executor-select');
+const taskWorkflowStatusSelect = document.querySelector('#task-workflow-status');
 const taskList = document.querySelector('#task-list');
 const tasksSummary = document.querySelector('#tasks-summary');
 const createTaskButton = document.querySelector('#create-task');
@@ -65,12 +66,18 @@ let structureFocusOnly = false;
 const taskHighlightTimers = new WeakMap();
 let pendingTaskIdFromUrl = getTaskIdFromUrl();
 
-const TASK_STATUS_LABELS = {
+const TASK_RUNTIME_STATUS_LABELS = {
   idle: '未运行',
   running: '运行中',
   waiting: '等待处理',
   lost: '会话丢失',
   ended: '已结束',
+};
+
+const TASK_WORKFLOW_STATUS_LABELS = {
+  todo: '待办',
+  doing: '推进中',
+  done: '已完成',
 };
 
 function normalizeExecutorOutputName(value) {
@@ -84,8 +91,26 @@ function normalizeExecutorOutputName(value) {
   return normalized || defaultExecutorOutputName;
 }
 
-function formatTaskStatus(status) {
-  return TASK_STATUS_LABELS[status] ?? TASK_STATUS_LABELS.idle;
+function getTaskRuntimeStatus(task) {
+  return task?.runtimeStatus ?? task?.status ?? 'idle';
+}
+
+function getTaskWorkflowStatus(task) {
+  return task?.workflowStatus ?? 'todo';
+}
+
+function formatTaskRuntimeStatus(status) {
+  return TASK_RUNTIME_STATUS_LABELS[status] ?? TASK_RUNTIME_STATUS_LABELS.idle;
+}
+
+function formatTaskWorkflowStatus(status) {
+  return TASK_WORKFLOW_STATUS_LABELS[status] ?? TASK_WORKFLOW_STATUS_LABELS.todo;
+}
+
+function renderTaskWorkflowOptions(selectedStatus) {
+  return Object.entries(TASK_WORKFLOW_STATUS_LABELS).map(([value, label]) => `
+    <option value="${escapeHtml(value)}" ${value === selectedStatus ? 'selected' : ''}>${escapeHtml(label)}</option>
+  `).join('');
 }
 
 function formatTaskTime(value) {
@@ -299,7 +324,7 @@ function getBlockingDependencyTitles(depIds, index) {
       continue;
     }
 
-    if (task.status === 'ended') {
+    if (getTaskRuntimeStatus(task) === 'ended') {
       continue;
     }
 
@@ -502,6 +527,8 @@ function renderStructureView(depIndex, { cycleTaskIds } = {}) {
   }
 
   structureList.innerHTML = rows.map((task) => {
+    const runtimeStatus = getTaskRuntimeStatus(task);
+    const workflowStatus = getTaskWorkflowStatus(task);
     const depIds = depIndex.depIdsByOwnerId.get(task.id) ?? [];
     const dependentIds = depIndex.dependentIdsByTaskId.get(task.id) ?? [];
     const blocking = getBlockingDependencyTitles(depIds, depIndex);
@@ -541,12 +568,13 @@ function renderStructureView(depIndex, { cycleTaskIds } = {}) {
         <div class="task-structure-main">
           <div class="task-structure-name">
             <strong>${escapeHtml(getTaskDisplayName(task))}</strong>
-            <span class="status-dot ${escapeHtml(task.status)}"></span>
-            <span class="task-structure-meta">${escapeHtml(formatTaskStatus(task.status))}</span>
+            <span class="workflow-pill ${escapeHtml(workflowStatus)}">${escapeHtml(formatTaskWorkflowStatus(workflowStatus))}</span>
+            <span class="status-dot ${escapeHtml(runtimeStatus)}"></span>
+            <span class="task-structure-meta">${escapeHtml(formatTaskRuntimeStatus(runtimeStatus))}</span>
             ${isSelected ? '<span class="task-focus-badge">焦点</span>' : ''}
             ${hasCycle ? '<span class="task-cycle-badge">环依赖</span>' : ''}
           </div>
-          <div class="task-structure-meta">${escapeHtml(blockedText)}</div>
+          <div class="task-structure-meta">${escapeHtml(`推进：${formatTaskWorkflowStatus(workflowStatus)} · 运行：${formatTaskRuntimeStatus(runtimeStatus)} · ${blockedText}`)}</div>
         </div>
 
         <div class="task-structure-col">
@@ -720,16 +748,30 @@ function summarizeTaskNote(note) {
 function summarizeTasks() {
   const counts = {
     total: tasks.length,
-    idle: 0,
-    running: 0,
-    waiting: 0,
-    lost: 0,
-    ended: 0,
+    workflow: {
+      todo: 0,
+      doing: 0,
+      done: 0,
+    },
+    runtime: {
+      idle: 0,
+      running: 0,
+      waiting: 0,
+      lost: 0,
+      ended: 0,
+    },
   };
 
   for (const task of tasks) {
-    if (counts[task.status] != null) {
-      counts[task.status] += 1;
+    const workflowStatus = getTaskWorkflowStatus(task);
+    const runtimeStatus = getTaskRuntimeStatus(task);
+
+    if (counts.workflow[workflowStatus] != null) {
+      counts.workflow[workflowStatus] += 1;
+    }
+
+    if (counts.runtime[runtimeStatus] != null) {
+      counts.runtime[runtimeStatus] += 1;
     }
   }
 
@@ -748,7 +790,7 @@ function renderWorkspaceOverview() {
   }
 
   if (overviewTaskActive) {
-    overviewTaskActive.textContent = `${summary.running} 运行中 / ${summary.waiting} 等待`;
+    overviewTaskActive.textContent = `${summary.workflow.doing} 推进中 / ${summary.runtime.waiting} 等待处理`;
   }
 
   if (overviewSession) {
@@ -825,11 +867,14 @@ function renderTasks() {
 
   const summaryItems = [
     { label: '任务总数', value: summary.total },
-    { label: '未运行', value: summary.idle },
-    { label: '运行中', value: summary.running },
-    { label: '等待处理', value: summary.waiting },
-    { label: '会话丢失', value: summary.lost },
-    { label: '已结束', value: summary.ended },
+    { label: '待办', value: summary.workflow.todo },
+    { label: '推进中', value: summary.workflow.doing },
+    { label: '已完成', value: summary.workflow.done },
+    { label: '未运行', value: summary.runtime.idle },
+    { label: '运行中', value: summary.runtime.running },
+    { label: '等待处理', value: summary.runtime.waiting },
+    { label: '会话丢失', value: summary.runtime.lost },
+    { label: '已结束', value: summary.runtime.ended },
   ];
 
   if (structureFocusOnly) {
@@ -854,6 +899,8 @@ function renderTasks() {
   }
 
   taskList.innerHTML = visibleTasks.map((task) => {
+    const workflowStatus = getTaskWorkflowStatus(task);
+    const runtimeStatus = getTaskRuntimeStatus(task);
     const executorName = executors.find((executor) => executor.id === task.executorId)?.name ?? task.executorId ?? '未绑定';
     const sessionShortId = task.linkedSessionId ? task.linkedSessionId.slice(0, 8) : '—';
     const canRun = Boolean(currentProject?.path && task.executorId);
@@ -878,6 +925,9 @@ function renderTasks() {
     const dependencyCount = depIds.length;
     const dependentsCount = depIndex.dependentsCountById.get(task.id) ?? 0;
     const blockingDeps = getBlockingDependencyTitles(depIds, depIndex);
+    const runtimeHint = runtimeStatus === 'lost'
+      ? '会话已丢失（服务重启或终端退出）。可重新运行以创建新会话。'
+      : (task.lastRunAt ? `最近运行：${formatTaskTime(task.lastRunAt)}` : '尚未运行。');
 
     return `
       <article class="task-cluster ${task.id === structureSelectedTaskId ? 'is-selected' : ''}" data-task-id="${escapeHtml(task.id)}">
@@ -892,6 +942,10 @@ function renderTasks() {
               <div>
                 <span class="label">执行器</span>
                 <div>${escapeHtml(executorName)}</div>
+              </div>
+              <div>
+                <span class="label">人工推进</span>
+                <div>${escapeHtml(formatTaskWorkflowStatus(workflowStatus))}</div>
               </div>
               <div>
                 <span class="label">终端绑定</span>
@@ -913,15 +967,36 @@ function renderTasks() {
             <span class="hint">${escapeHtml(terminalHint)}</span>
           </div>
 
-          <div class="task-card-status">
-            <div class="task-status-row">
-              <span class="status-dot ${escapeHtml(task.status)}"></span>
-              <strong>${escapeHtml(formatTaskStatus(task.status))}</strong>
+          <div class="task-card-status-grid">
+            <div class="task-status-block">
+              <span class="label">人工推进状态</span>
+              <div class="task-status-row">
+                <span class="workflow-pill ${escapeHtml(workflowStatus)}">${escapeHtml(formatTaskWorkflowStatus(workflowStatus))}</span>
+              </div>
+              <span class="hint">由你决定 todo / doing / done，不会再被终端运行态直接覆盖。</span>
             </div>
-            <span class="hint">${escapeHtml(task.status === 'lost'
-              ? '会话已丢失（服务重启或终端退出）。可重新运行以创建新会话。'
-              : (task.lastRunAt ? `最近运行：${formatTaskTime(task.lastRunAt)}` : '尚未运行。')
-            )}</span>
+
+            <div class="task-status-block">
+              <span class="label">运行态</span>
+              <div class="task-status-row">
+                <span class="status-dot ${escapeHtml(runtimeStatus)}"></span>
+                <strong>${escapeHtml(formatTaskRuntimeStatus(runtimeStatus))}</strong>
+              </div>
+              <span class="hint">${escapeHtml(runtimeHint)}</span>
+            </div>
+          </div>
+
+          <div class="task-workflow-control">
+            <label class="task-field">
+              <span class="label">切换人工推进状态</span>
+              <select
+                class="executor-select task-workflow-select"
+                data-action="workflow-status"
+                data-task-id="${escapeHtml(task.id)}"
+              >
+                ${renderTaskWorkflowOptions(workflowStatus)}
+              </select>
+            </label>
           </div>
 
           <div class="task-card-actions">
@@ -1101,6 +1176,7 @@ async function createTaskCard() {
   const title = taskTitleInput?.value?.trim() ?? '';
   const description = taskDescriptionInput?.value?.trim() ?? '';
   const executorId = taskExecutorSelect?.value?.trim() ?? '';
+  const workflowStatus = taskWorkflowStatusSelect?.value?.trim() ?? 'todo';
 
   if (!title) {
     appendLog('请先输入任务标题。', 'warn');
@@ -1122,7 +1198,7 @@ async function createTaskCard() {
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ title, description, executorId }),
+      body: JSON.stringify({ title, description, executorId, workflowStatus }),
     });
     const payload = await response.json();
 
@@ -1133,6 +1209,9 @@ async function createTaskCard() {
     upsertTask(payload.task);
     taskForm.reset();
     syncTaskExecutorOptions();
+    if (taskWorkflowStatusSelect) {
+      taskWorkflowStatusSelect.value = 'todo';
+    }
     toggleTaskForm(false);
     appendLog(`已创建任务卡：${payload.task.title}`, 'success');
   } catch (error) {
@@ -1301,6 +1380,39 @@ async function saveTaskDependencies(taskId) {
     state.isSaving = false;
     renderTasks();
     appendLog(`保存依赖失败：${error.message}`, 'warn');
+  }
+}
+
+async function updateTaskWorkflowStatus(taskId, workflowStatus) {
+  const task = tasks.find((item) => item.id === taskId);
+
+  if (!task) {
+    appendLog('未找到对应任务卡。', 'warn');
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/tasks/workflow-status', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        taskId,
+        workflowStatus,
+      }),
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? '更新推进状态失败');
+    }
+
+    upsertTask(payload.task);
+    appendLog(`任务卡“${payload.task.title}”推进状态已切换为 ${formatTaskWorkflowStatus(getTaskWorkflowStatus(payload.task))}。`, 'success');
+  } catch (error) {
+    appendLog(`更新推进状态失败：${error.message}`, 'warn');
+    renderTasks();
   }
 }
 
@@ -1941,6 +2053,22 @@ taskList?.addEventListener('input', (event) => {
 
   const state = getTaskNoteEditorState(task);
   state.draft = input.value;
+});
+taskList?.addEventListener('change', async (event) => {
+  const workflowSelect = event.target.closest('select[data-action="workflow-status"]');
+
+  if (!workflowSelect) {
+    return;
+  }
+
+  const taskId = workflowSelect.dataset.taskId;
+  const workflowStatus = workflowSelect.value;
+
+  if (!taskId) {
+    return;
+  }
+
+  await updateTaskWorkflowStatus(taskId, workflowStatus);
 });
 taskList?.addEventListener('click', async (event) => {
   const actionButton = event.target.closest('button[data-action]');

@@ -4,7 +4,8 @@ import crypto from 'node:crypto';
 
 const dataDir = path.resolve(process.cwd(), 'source/server/data');
 const stateFilePath = path.join(dataDir, 'project-state.json');
-const TASK_STATUSES = new Set(['idle', 'running', 'waiting', 'lost', 'ended']);
+const TASK_RUNTIME_STATUSES = new Set(['idle', 'running', 'waiting', 'lost', 'ended']);
+const TASK_WORKFLOW_STATUSES = new Set(['todo', 'doing', 'done']);
 const TASK_ATTACHMENT_TYPES = new Set(['note']);
 const MEMORY_TEXT_LIMIT = 8000;
 const MEMORY_ENABLED = process.env.SIMPLEKANBAN_ENABLE_MEMORY === '1';
@@ -84,8 +85,20 @@ function normalizeMemory(input) {
   };
 }
 
-function normalizeTaskStatus(status) {
-  return TASK_STATUSES.has(status) ? status : 'idle';
+function normalizeTaskRuntimeStatus(status) {
+  return TASK_RUNTIME_STATUSES.has(status) ? status : 'idle';
+}
+
+function normalizeTaskWorkflowStatus(status) {
+  return TASK_WORKFLOW_STATUSES.has(status) ? status : 'todo';
+}
+
+function inferLegacyTaskWorkflowStatus(runtimeStatus) {
+  if (runtimeStatus === 'running' || runtimeStatus === 'waiting' || runtimeStatus === 'lost') {
+    return 'doing';
+  }
+
+  return 'todo';
 }
 
 function normalizeTaskDependencyIds(value, { selfId } = {}) {
@@ -227,13 +240,17 @@ function mapTask(task) {
   });
   const primaryNoteAttachment = getPrimaryTaskNoteAttachment({ attachments });
   const dependencyIds = normalizeTaskDependencyIds(task.dependencyIds ?? task.dependsOnIds, { selfId: task.id });
+  const runtimeStatus = normalizeTaskRuntimeStatus(task.runtimeStatus ?? task.status);
+  const workflowStatus = normalizeTaskWorkflowStatus(task.workflowStatus ?? inferLegacyTaskWorkflowStatus(runtimeStatus));
 
   return {
     id: task.id,
     title: String(task.title ?? '').trim(),
     description: String(task.description ?? '').trim(),
     executorId: String(task.executorId ?? '').trim(),
-    status: normalizeTaskStatus(task.status),
+    workflowStatus,
+    runtimeStatus,
+    status: runtimeStatus,
     dependencyIds,
     linkedSessionId: task.linkedSessionId ? String(task.linkedSessionId) : null,
     lastRunAt: task.lastRunAt ?? null,
@@ -319,13 +336,18 @@ async function writeState(state) {
 }
 
 function buildTaskPatch(currentTask, patch) {
+  const nextRuntimeStatus = patch?.runtimeStatus ?? patch?.status ?? currentTask.runtimeStatus ?? currentTask.status;
+  const nextWorkflowStatus = patch?.workflowStatus ?? currentTask.workflowStatus;
+
   const nextTask = mapTask({
     ...currentTask,
     ...patch,
     id: currentTask.id,
     createdAt: currentTask.createdAt,
     updatedAt: now(),
-    status: patch?.status ? normalizeTaskStatus(patch.status) : currentTask.status,
+    runtimeStatus: normalizeTaskRuntimeStatus(nextRuntimeStatus),
+    status: normalizeTaskRuntimeStatus(nextRuntimeStatus),
+    workflowStatus: normalizeTaskWorkflowStatus(nextWorkflowStatus),
     dependencyIds: patch?.dependencyIds ?? currentTask.dependencyIds ?? [],
   });
 
@@ -477,6 +499,8 @@ export async function createTask(input) {
       title,
       description,
       executorId,
+      workflowStatus: normalizeTaskWorkflowStatus(input?.workflowStatus),
+      runtimeStatus: 'idle',
       status: 'idle',
       dependencyIds: [],
       linkedSessionId: null,

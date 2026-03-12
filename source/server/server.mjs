@@ -50,6 +50,14 @@ function mapTaskStatusFromSessionStatus(sessionStatus) {
   return 'idle';
 }
 
+function getNextWorkflowStatusOnRun(task) {
+  if (task?.workflowStatus === 'doing') {
+    return 'doing';
+  }
+
+  return 'doing';
+}
+
 function detectTaskWaitingState(output) {
   const text = String(output ?? '').toLowerCase();
 
@@ -124,6 +132,7 @@ async function syncLinkedTaskWithSession(session, extras = {}) {
   }
 
   const updatedTask = await updateTask(task.id, {
+    runtimeStatus: nextStatus,
     status: nextStatus,
     linkedSessionId: nextSessionId,
     lastStatusAt: now(),
@@ -327,6 +336,7 @@ async function handleTaskCreate(request, response) {
       title: body.title,
       description: body.description,
       executorId: body.executorId,
+      workflowStatus: body.workflowStatus,
     });
     sendJson(response, 201, { task });
   } catch (error) {
@@ -434,6 +444,40 @@ async function handleTaskDependenciesUpdate(request, response) {
   }
 }
 
+async function handleTaskWorkflowStatusUpdate(request, response) {
+  try {
+    const body = await readBody(request);
+    const taskId = String(body.taskId ?? '').trim();
+    const workflowStatus = String(body.workflowStatus ?? '').trim();
+
+    if (!taskId) {
+      sendJson(response, 400, { error: 'taskId is required.' });
+      return;
+    }
+
+    if (!workflowStatus) {
+      sendJson(response, 400, { error: 'workflowStatus is required.' });
+      return;
+    }
+
+    const task = await getTask(taskId);
+
+    if (!task) {
+      sendJson(response, 404, { error: 'Task not found.' });
+      return;
+    }
+
+    const updatedTask = await updateTask(taskId, {
+      workflowStatus,
+    });
+
+    sendJson(response, 200, { task: updatedTask });
+  } catch (error) {
+    console.error(error);
+    sendJson(response, 500, { error: error.message || 'Failed to update task workflow status.' });
+  }
+}
+
 async function handleTaskRun(request, response) {
   try {
     const body = await readBody(request);
@@ -466,6 +510,8 @@ async function handleTaskRun(request, response) {
     };
 
     const updatedTask = await updateTask(task.id, {
+      workflowStatus: getNextWorkflowStatusOnRun(task),
+      runtimeStatus: 'running',
       status: 'running',
       linkedSessionId: session.id,
       lastRunAt: now(),
@@ -643,6 +689,11 @@ async function requestHandler(request, response) {
 
   if (request.method === 'POST' && requestUrl.pathname === '/api/tasks/dependencies') {
     await handleTaskDependenciesUpdate(request, response);
+    return;
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/tasks/workflow-status') {
+    await handleTaskWorkflowStatusUpdate(request, response);
     return;
   }
 
