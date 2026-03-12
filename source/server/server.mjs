@@ -16,6 +16,7 @@ import {
   markInterruptedTasksLost,
 } from './lib/project-store.mjs';
 import { ensureDirectoryPath, selectProjectFolder } from './lib/folder-dialog.mjs';
+import { createSessionResumedEvent, parseSessionOutput } from './lib/session-output-parser.mjs';
 import { createTerminalSessionManager } from './lib/terminal-session-manager.mjs';
 
 const host = process.env.HOST ?? '127.0.0.1';
@@ -58,41 +59,6 @@ function getNextWorkflowStatusOnRun(task) {
   }
 
   return 'doing';
-}
-
-function detectTaskWaitingState(output) {
-  const text = String(output ?? '').toLowerCase();
-
-  if (!text.trim()) {
-    return false;
-  }
-
-  const keywordMatch = [
-    'press any key',
-    'continue?',
-    'need input',
-    'enter input',
-    'password',
-    'confirm',
-    '[y/n]',
-    '(y/n)',
-    'waiting for input',
-    'input required',
-    'input:',
-    'permission',
-    'allow',
-  ].some((keyword) => text.includes(keyword));
-
-  if (keywordMatch) {
-    return true;
-  }
-
-  return [
-    /\benter\b.{0,20}\b(password|passcode|input|value|choice|selection)\b/,
-    /\b(confirm|approve|allow)\b.{0,20}\?/,
-    /\b(read-host|prompt)\b/,
-    /\b(password|passcode|input|value|choice|selection)\s*:\s*$/,
-  ].some((pattern) => pattern.test(text));
 }
 
 function buildPrimaryNoteAttachment(task, content) {
@@ -160,6 +126,23 @@ async function syncTasksBoundToSession(session, extras = {}) {
   return Promise.all(updates);
 }
 
+function writeToSession(sessionId, data) {
+  const session = getSessionSnapshotOrNull(sessionId);
+
+  if (!session) {
+    throw new Error('Session not found.');
+  }
+
+  if (session.status === 'waiting') {
+    terminalSessionManager.patchSession(sessionId, {
+      status: 'running',
+    });
+    terminalSessionManager.publishEvent(sessionId, createSessionResumedEvent());
+  }
+
+  terminalSessionManager.write(sessionId, data);
+}
+
 terminalSessionManager.subscribeAll((event) => {
   if (event.type === 'session') {
     syncTasksBoundToSession(event.session).catch((error) => {
@@ -169,11 +152,20 @@ terminalSessionManager.subscribeAll((event) => {
   }
 
   if (event.type === 'output') {
-    const status = detectTaskWaitingState(event.data) ? 'waiting' : undefined;
-    const session = terminalSessionManager.getSnapshot(event.sessionId);
+    const parsedEvents = parseSessionOutput(event.data);
+    let session = terminalSessionManager.getSnapshot(event.sessionId);
+    let status = undefined;
+
+    for (const parsedEvent of parsedEvents) {
+      terminalSessionManager.publishEvent(event.sessionId, parsedEvent);
+
+      if (parsedEvent.eventName === 'session.waiting') {
+        status = 'waiting';
+      }
+    }
 
     if (status === 'waiting' && session?.status !== 'waiting') {
-      terminalSessionManager.patchSession(event.sessionId, { status: 'waiting' });
+      session = terminalSessionManager.patchSession(event.sessionId, { status: 'waiting' });
     }
 
     syncTasksBoundToSession(session, {
@@ -596,11 +588,17 @@ async function handleTaskSessionBindingUpdate(request, response) {
       return;
     }
 
+    const linkedSession = sessionId ? getSessionSnapshotOrNull(sessionId) : null;
+    const nextRuntimeStatus = linkedSession
+      ? mapTaskStatusFromSessionStatus(linkedSession.status)
+      : 'idle';
+
     const updatedTask = await updateTask(taskId, {
       linkedSessionId: sessionId,
-      runtimeStatus: sessionId ? task.runtimeStatus : 'idle',
-      status: sessionId ? task.status : 'idle',
+      runtimeStatus: nextRuntimeStatus,
+      status: nextRuntimeStatus,
       lastStatusAt: now(),
+      lastTerminalActivityAt: linkedSession?.lastOutputAt ?? (sessionId ? task.lastTerminalActivityAt : null),
     });
 
     sendJson(response, 200, { task: updatedTask });
@@ -642,7 +640,7 @@ async function handleTaskRun(request, response) {
     });
 
     terminalSessionManager.patchSession(session.id, { status: 'running', error: null });
-    terminalSessionManager.write(session.id, `${command}\r`);
+    writeToSession(session.id, `${command}\r`);
 
     sendJson(response, 200, {
       task: updatedTask,
@@ -707,7 +705,7 @@ async function handleExecutorInject(request, response) {
     const params = normalizeExecutorParams(executorId, body.params ?? {});
     const command = buildExecutorCommand(executorId, params);
     terminalSessionManager.patchSession(session.id, { status: 'running', error: null });
-    terminalSessionManager.write(session.id, `${command}\r`);
+    writeToSession(session.id, `${command}\r`);
 
     sendJson(response, 200, {
       executorId,
@@ -766,7 +764,7 @@ async function handleWebSocketMessage(socket, raw) {
 
     if (message.type === 'input') {
       const sessionId = String(message.sessionId ?? socket.currentSessionId ?? '').trim();
-      terminalSessionManager.write(sessionId, String(message.data ?? ''));
+      writeToSession(sessionId, String(message.data ?? ''));
       return;
     }
 

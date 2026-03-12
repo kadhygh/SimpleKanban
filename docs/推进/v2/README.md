@@ -42,6 +42,7 @@
 
 - `docs/推进/v2/修订版里程碑草案.md`：围绕对象模型、双工作区视图和多 session 路线的正式草案
 - `docs/推进/v2/Session等待态与ParsedEvents切口.md`：围绕 `waiting` / `input required` 检测与 `parsed events` 引入方式的后续切口说明
+- `docs/推进/v2/交接.md`：当前跨设备续做时的交接状态、待测项和下一步门槛
 
 ## 参考关系
 

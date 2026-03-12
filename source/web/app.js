@@ -1685,7 +1685,7 @@ async function runTask(taskId) {
   }
 
   if (socket?.readyState !== WebSocket.OPEN) {
-    connectTerminal('connect');
+    connectTerminal(task.linkedSessionId ?? selectedSessionId, 'connect');
   }
 
   const button = taskList.querySelector(`[data-action="run-task"][data-task-id="${taskId}"]`);
@@ -1962,7 +1962,17 @@ function ensureTerminal() {
       return;
     }
 
-    socket.send(JSON.stringify({ type: 'input', data }));
+    if (!selectedSessionId || !currentSession || currentSession.id !== selectedSessionId) {
+      return;
+    }
+
+    const sessionStatus = getSessionStatus(currentSession);
+
+    if (sessionStatus !== 'running' && sessionStatus !== 'waiting') {
+      return;
+    }
+
+    socket.send(JSON.stringify({ type: 'input', sessionId: selectedSessionId, data }));
   });
 
   resizeObserver = new ResizeObserver(() => {
@@ -2040,6 +2050,20 @@ function connectTerminal(sessionId = selectedSessionId, mode = 'connect') {
       if (payload.sessionId) {
         selectedSessionId = payload.sessionId;
       }
+      await refreshTasksSilently();
+      return;
+    }
+
+    if (payload.type === 'parsed_event') {
+      if (payload.eventName === 'session.waiting') {
+        appendLog(`Session 进入等待态：${payload.detail}`, 'warn');
+      } else if (payload.eventName === 'session.resumed') {
+        appendLog(`Session 已恢复运行：${payload.detail}`, 'success');
+      } else {
+        appendLog(`Session 事件：${payload.eventName}`, 'warn');
+      }
+
+      await loadSessions(payload.sessionId ?? selectedSessionId);
       await refreshTasksSilently();
       return;
     }

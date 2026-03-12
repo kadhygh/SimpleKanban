@@ -112,6 +112,19 @@ export function createTerminalSessionManager() {
     }
   }
 
+  function publishEvent(sessionId, event) {
+    const entry = getEntry(sessionId);
+
+    if (!entry) {
+      throw new Error('Session not found.');
+    }
+
+    emit(entry, {
+      ...event,
+      sessionId: entry.session.id,
+    });
+  }
+
   function emitSession(entry) {
     emit(entry, { type: 'session', session: withRuntimeStatus(entry.session) });
   }
@@ -383,6 +396,7 @@ export function createTerminalSessionManager() {
     getSnapshot,
     listSnapshots,
     patchSession,
+    publishEvent,
     resize,
     subscribe,
     subscribeAll,
