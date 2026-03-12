@@ -7,11 +7,15 @@ const selectProjectButton = document.querySelector('#select-project');
 const refreshProjectButton = document.querySelector('#refresh-project');
 const openTerminalButton = document.querySelector('#open-terminal');
 const reconnectTerminalButton = document.querySelector('#reconnect-terminal');
+const closeTerminalButton = document.querySelector('#close-terminal');
 const terminalConn = document.querySelector('#terminal-conn');
 const terminalSession = document.querySelector('#terminal-session');
 const terminalSize = document.querySelector('#terminal-size');
+const terminalSessionCount = document.querySelector('#terminal-session-count');
 const terminalPanel = document.querySelector('#terminal-panel');
 const terminalRoot = document.querySelector('#terminal-root');
+const sessionSelect = document.querySelector('#session-select');
+const sessionList = document.querySelector('#session-list');
 const executorSelect = document.querySelector('#executor-select');
 const executorOutputName = document.querySelector('#executor-output-name');
 const executorStatus = document.querySelector('#executor-status');
@@ -43,6 +47,8 @@ const FitAddonCtor = window.FitAddon?.FitAddon;
 
 let currentProject = null;
 let currentSession = null;
+let sessions = [];
+let selectedSessionId = null;
 let terminal = null;
 let fitAddon = null;
 let socket = null;
@@ -93,6 +99,50 @@ function normalizeExecutorOutputName(value) {
 
 function getTaskRuntimeStatus(task) {
   return task?.runtimeStatus ?? task?.status ?? 'idle';
+}
+
+function getSessionStatus(session) {
+  return session?.runtimeStatus ?? session?.status ?? 'closed';
+}
+
+function getSessionById(sessionId) {
+  if (!sessionId) {
+    return null;
+  }
+
+  return sessions.find((session) => session.id === sessionId) ?? null;
+}
+
+function getSessionDisplayName(session) {
+  if (!session) {
+    return '未选择';
+  }
+
+  return session.name ? `${session.name} · ${session.id.slice(0, 8)}` : session.id.slice(0, 8);
+}
+
+function formatSessionStatus(status) {
+  if (status === 'starting') {
+    return '启动中';
+  }
+
+  if (status === 'running') {
+    return '运行中';
+  }
+
+  if (status === 'waiting') {
+    return '等待处理';
+  }
+
+  if (status === 'closed') {
+    return '已关闭';
+  }
+
+  if (status === 'error') {
+    return '错误';
+  }
+
+  return '未知';
 }
 
 function getTaskWorkflowStatus(task) {
@@ -794,10 +844,147 @@ function renderWorkspaceOverview() {
   }
 
   if (overviewSession) {
+    const activeCount = sessions.filter((session) => ['starting', 'running', 'waiting'].includes(getSessionStatus(session))).length;
     overviewSession.textContent = currentSession
-      ? `${currentSession.status} · ${currentSession.id.slice(0, 8)}`
-      : '未创建';
+      ? `${activeCount} 活跃 · ${getSessionDisplayName(currentSession)}`
+      : `${activeCount} 活跃 · 未选择`;
   }
+}
+
+function chooseNextSelectedSessionId(nextSessions, preferredId = selectedSessionId) {
+  if (preferredId && nextSessions.some((session) => session.id === preferredId)) {
+    return preferredId;
+  }
+
+  const nextActive = nextSessions.find((session) => ['running', 'waiting', 'starting'].includes(getSessionStatus(session)));
+  return nextActive?.id ?? nextSessions[0]?.id ?? null;
+}
+
+function renderSessionCollection() {
+  if (terminalSessionCount) {
+    const activeCount = sessions.filter((session) => ['starting', 'running', 'waiting'].includes(getSessionStatus(session))).length;
+    terminalSessionCount.textContent = `${activeCount} / 3`;
+  }
+
+  if (sessionSelect) {
+    sessionSelect.innerHTML = '';
+
+    if (sessions.length === 0) {
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = '当前没有 Session';
+      sessionSelect.append(option);
+      sessionSelect.disabled = true;
+    } else {
+      for (const session of sessions) {
+        const option = document.createElement('option');
+        option.value = session.id;
+        option.textContent = `${session.name} · ${formatSessionStatus(getSessionStatus(session))}`;
+        sessionSelect.append(option);
+      }
+
+      sessionSelect.disabled = false;
+      sessionSelect.value = selectedSessionId ?? sessions[0].id;
+    }
+  }
+
+  if (reconnectTerminalButton) {
+    reconnectTerminalButton.disabled = !selectedSessionId;
+  }
+
+  if (closeTerminalButton) {
+    closeTerminalButton.disabled = !selectedSessionId;
+  }
+
+  if (sessionList) {
+    if (sessions.length === 0) {
+      sessionList.innerHTML = '<div class="task-empty">当前还没有 Session。先点击“新建 Session”。</div>';
+    } else {
+      sessionList.innerHTML = sessions.map((session) => {
+        const status = getSessionStatus(session);
+        const isSelected = selectedSessionId === session.id;
+        return `
+          <button
+            type="button"
+            class="session-chip ${isSelected ? 'is-selected' : ''}"
+            data-action="select-session"
+            data-session-id="${escapeHtml(session.id)}"
+          >
+            <span class="session-chip-name">${escapeHtml(session.name)}</span>
+            <span class="session-chip-meta">${escapeHtml(formatSessionStatus(status))} · ${escapeHtml(session.id.slice(0, 8))}</span>
+          </button>
+        `;
+      }).join('');
+    }
+  }
+}
+
+function renderSession(session) {
+  clearExecutorStatusLock();
+  currentSession = session ?? null;
+
+  if (session?.id) {
+    selectedSessionId = session.id;
+    const existing = sessions.find((item) => item.id === session.id);
+
+    if (existing) {
+      Object.assign(existing, session);
+      sessions = [...sessions];
+    }
+  }
+
+  renderSessionCollection();
+  renderWorkspaceOverview();
+
+  if (!session) {
+    terminalSession.textContent = '未创建';
+    terminalSession.className = '';
+    terminalSize.textContent = '-- x --';
+    if (closeTerminalButton) {
+      closeTerminalButton.disabled = true;
+    }
+    updateExecutorControls();
+    return;
+  }
+
+  terminalSession.textContent = `${session.name} · ${formatSessionStatus(getSessionStatus(session))}`;
+  terminalSession.className = getSessionStatus(session) === 'running' ? 'success' : 'warn';
+  terminalSize.textContent = `${session.cols} x ${session.rows}`;
+  lastKnownTerminalSize = {
+    cols: session.cols,
+    rows: session.rows,
+  };
+  if (closeTerminalButton) {
+    closeTerminalButton.disabled = false;
+  }
+  updateExecutorControls();
+}
+
+function applySessions(nextSessions, preferredId = selectedSessionId) {
+  sessions = Array.isArray(nextSessions) ? nextSessions : [];
+  selectedSessionId = chooseNextSelectedSessionId(sessions, preferredId);
+  const selectedSession = getSessionById(selectedSessionId);
+  renderSession(selectedSession);
+  renderTasks();
+}
+
+function upsertSessionLocal(session) {
+  if (!session?.id) {
+    return;
+  }
+
+  const index = sessions.findIndex((item) => item.id === session.id);
+
+  if (index === -1) {
+    sessions = [session, ...sessions];
+  } else {
+    sessions[index] = session;
+    sessions = [...sessions];
+  }
+
+  selectedSessionId = session.id;
+  renderSessionCollection();
+  renderWorkspaceOverview();
 }
 
 function syncTaskExecutorOptions() {
@@ -902,14 +1089,15 @@ function renderTasks() {
     const workflowStatus = getTaskWorkflowStatus(task);
     const runtimeStatus = getTaskRuntimeStatus(task);
     const executorName = executors.find((executor) => executor.id === task.executorId)?.name ?? task.executorId ?? '未绑定';
+    const linkedSession = getSessionById(task.linkedSessionId);
     const sessionShortId = task.linkedSessionId ? task.linkedSessionId.slice(0, 8) : '—';
     const canRun = Boolean(currentProject?.path && task.executorId);
-    const terminalBindingText = task.linkedSessionId
-      ? `共享终端 · ${sessionShortId}`
-      : '尚未绑定共享终端';
-    const terminalHint = task.linkedSessionId
-      ? '当前阶段所有任务共享一个活跃终端；运行新任务会把当前绑定切到这张卡。'
-      : '点击运行后，会复用当前唯一活跃终端。';
+    const terminalBindingText = linkedSession
+      ? `${linkedSession.name} · ${formatSessionStatus(getSessionStatus(linkedSession))}`
+      : (task.linkedSessionId ? `会话丢失 · ${sessionShortId}` : '未绑定 Session');
+    const terminalHint = linkedSession
+      ? '当前任务会优先复用这个 Session；你也可以切换绑定或清空绑定。'
+      : (task.linkedSessionId ? '原绑定 Session 已不存在。再次运行时会自动创建新 Session。' : '当前未绑定 Session；直接运行会自动创建新 Session。');
     const noteEditor = syncTaskNoteEditorState(task);
     const note = getTaskPrimaryNote(task);
     const hasNote = Boolean(note?.content);
@@ -995,6 +1183,24 @@ function renderTasks() {
                 data-task-id="${escapeHtml(task.id)}"
               >
                 ${renderTaskWorkflowOptions(workflowStatus)}
+              </select>
+            </label>
+          </div>
+
+          <div class="task-workflow-control">
+            <label class="task-field">
+              <span class="label">绑定 Session</span>
+              <select
+                class="executor-select task-workflow-select"
+                data-action="session-binding"
+                data-task-id="${escapeHtml(task.id)}"
+              >
+                <option value="">不绑定，运行时自动新建</option>
+                ${sessions.map((session) => `
+                  <option value="${escapeHtml(session.id)}" ${task.linkedSessionId === session.id ? 'selected' : ''}>
+                    ${escapeHtml(`${session.name} · ${formatSessionStatus(getSessionStatus(session))}`)}
+                  </option>
+                `).join('')}
               </select>
             </label>
           </div>
@@ -1115,7 +1321,7 @@ function focusTerminalPanel(task) {
   terminal?.focus();
 
   if (task?.title) {
-    appendLog(`已定位到共享终端，可继续处理任务“${task.title}”。`);
+    appendLog(`已定位到 Session 终端，可继续处理任务“${task.title}”。`);
   }
 }
 
@@ -1416,6 +1622,48 @@ async function updateTaskWorkflowStatus(taskId, workflowStatus) {
   }
 }
 
+window.setInterval(() => {
+  if (!currentProject?.path) {
+    return;
+  }
+
+  loadSessions(selectedSessionId).catch(() => {});
+  refreshTasksSilently().catch(() => {});
+}, 3000);
+
+async function updateTaskSessionBinding(taskId, sessionId) {
+  const task = tasks.find((item) => item.id === taskId);
+
+  if (!task) {
+    appendLog('未找到对应任务卡。', 'warn');
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/tasks/session-binding', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        taskId,
+        sessionId: sessionId || null,
+      }),
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? '更新 Session 绑定失败');
+    }
+
+    upsertTask(payload.task);
+    appendLog(`任务卡“${payload.task.title}”已${payload.task.linkedSessionId ? '绑定' : '解除绑定'} Session。`, 'success');
+  } catch (error) {
+    appendLog(`更新 Session 绑定失败：${error.message}`, 'warn');
+    renderTasks();
+  }
+}
+
 async function runTask(taskId) {
   const task = tasks.find((item) => item.id === taskId);
 
@@ -1453,6 +1701,7 @@ async function runTask(taskId) {
       },
       body: JSON.stringify({
         taskId,
+        sessionId: task.linkedSessionId ?? null,
         params: getTaskRunParams(task),
         ...getCurrentTerminalSize(),
       }),
@@ -1464,7 +1713,9 @@ async function runTask(taskId) {
     }
 
     if (payload.session) {
+      upsertSessionLocal(payload.session);
       renderSession(payload.session);
+      connectTerminal(payload.session.id, 'connect');
     }
 
     if (payload.task) {
@@ -1543,7 +1794,8 @@ function getExecutorPreview(executor) {
 function updateExecutorControls() {
   const hasProject = Boolean(currentProject?.path);
   const hasExecutors = executors.length > 0;
-  const hasRunningTerminal = currentSession?.status === 'running';
+  const currentSessionStatus = getSessionStatus(currentSession);
+  const hasRunningTerminal = currentSessionStatus === 'running' || currentSessionStatus === 'waiting';
 
   executorSelect.disabled = !hasExecutors;
   executorOutputName.disabled = !hasProject || !hasExecutors;
@@ -1583,6 +1835,9 @@ function renderProject(project) {
     projectName.textContent = '点击“选择工程”后，服务会保存当前项目路径。';
     openTerminalButton.disabled = true;
     reconnectTerminalButton.disabled = true;
+    if (closeTerminalButton) {
+      closeTerminalButton.disabled = true;
+    }
     syncTaskExecutorOptions();
     if (createTaskButton) {
       createTaskButton.disabled = true;
@@ -1596,34 +1851,14 @@ function renderProject(project) {
   projectName.textContent = `项目名称：${project.name}`;
   openTerminalButton.disabled = false;
   reconnectTerminalButton.disabled = false;
+  if (closeTerminalButton) {
+    closeTerminalButton.disabled = !selectedSessionId;
+  }
   syncTaskExecutorOptions();
   if (createTaskButton) {
     createTaskButton.disabled = executors.length === 0;
   }
   renderTasks();
-  updateExecutorControls();
-}
-
-function renderSession(session) {
-  clearExecutorStatusLock();
-  currentSession = session ?? null;
-  renderWorkspaceOverview();
-
-  if (!session) {
-    terminalSession.textContent = '未创建';
-    terminalSession.className = '';
-    terminalSize.textContent = '-- x --';
-    updateExecutorControls();
-    return;
-  }
-
-  terminalSession.textContent = `${session.status} · ${session.id.slice(0, 8)}`;
-  terminalSession.className = session.status === 'running' ? 'success' : 'warn';
-  terminalSize.textContent = `${session.cols} x ${session.rows}`;
-  lastKnownTerminalSize = {
-    cols: session.cols,
-    rows: session.rows,
-  };
   updateExecutorControls();
 }
 
@@ -1752,13 +1987,19 @@ function disconnectTerminal() {
   }
 }
 
-function connectTerminal(mode = 'connect') {
+function connectTerminal(sessionId = selectedSessionId, mode = 'connect') {
   if (!currentProject?.path) {
     appendLog('请先选择工程目录，再启动网页终端。', 'warn');
     return;
   }
 
+  if (!sessionId) {
+    appendLog('请先选择一个 Session，再连接终端。', 'warn');
+    return;
+  }
+
   ensureTerminal();
+  terminal.reset();
   disconnectTerminal();
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1778,6 +2019,7 @@ function connectTerminal(mode = 'connect') {
     syncTerminalSize();
     socket.send(JSON.stringify({
       type: 'connect',
+      sessionId,
       cols: terminal.cols,
       rows: terminal.rows,
     }));
@@ -1787,25 +2029,28 @@ function connectTerminal(mode = 'connect') {
     const payload = JSON.parse(event.data);
 
     if (payload.type === 'session') {
+      upsertSessionLocal(payload.session);
       renderSession(payload.session);
       await refreshTasksSilently();
-
-      if (payload.recentOutput) {
-        terminal.write(payload.recentOutput);
-      }
-
       return;
     }
 
     if (payload.type === 'output') {
       terminal.write(payload.data);
+      if (payload.sessionId) {
+        selectedSessionId = payload.sessionId;
+      }
       await refreshTasksSilently();
       return;
     }
 
     if (payload.type === 'exit') {
+      if (payload.session) {
+        upsertSessionLocal(payload.session);
+      }
       renderSession(payload.session ?? null);
       await refreshTasksSilently();
+      await loadSessions(payload.session?.id ?? selectedSessionId);
       appendLog(`终端已退出，exitCode=${payload.exitCode ?? 'null'}`, 'warn');
       terminal.writeln('');
       terminal.writeln('[Terminal exited]');
@@ -1831,7 +2076,7 @@ function connectTerminal(mode = 'connect') {
 }
 
 function tryRestoreRunningSession(session) {
-  if (!session || session.status !== 'running') {
+  if (!session || (getSessionStatus(session) !== 'running' && getSessionStatus(session) !== 'waiting')) {
     return;
   }
 
@@ -1839,7 +2084,7 @@ function tryRestoreRunningSession(session) {
     return;
   }
 
-  connectTerminal('restore');
+  connectTerminal(session.id, 'restore');
 }
 
 async function loadHealth() {
@@ -1865,6 +2110,10 @@ async function loadCurrentProject() {
     const payload = await response.json();
     renderProject(payload.project);
 
+    if (!payload.project) {
+      applySessions([], null);
+    }
+
     if (payload.project) {
       appendLog(`已加载当前项目：${payload.project.path}`);
     } else {
@@ -1875,15 +2124,83 @@ async function loadCurrentProject() {
   }
 }
 
-async function loadTerminalSession() {
+async function loadSessions(preferredId = selectedSessionId) {
   try {
-    const response = await fetch('/api/terminal/session', { cache: 'no-store' });
+    const response = await fetch('/api/sessions', { cache: 'no-store' });
     const payload = await response.json();
-    renderSession(payload.session);
-    return payload.session ?? null;
+    applySessions(payload.sessions ?? [], preferredId);
+    return getSessionById(selectedSessionId) ?? null;
   } catch (error) {
-    appendLog(`读取终端快照失败：${error.message}`, 'warn');
+    appendLog(`读取 Session 列表失败：${error.message}`, 'warn');
     return null;
+  }
+}
+
+async function createSession() {
+  if (!currentProject?.path) {
+    appendLog('请先选择工程目录，再创建 Session。', 'warn');
+    return;
+  }
+
+  openTerminalButton.disabled = true;
+
+  try {
+    ensureTerminal();
+    const response = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        ...getCurrentTerminalSize(),
+      }),
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? '创建 Session 失败');
+    }
+
+    terminal.reset();
+    applySessions(payload.sessions ?? [], payload.session?.id ?? null);
+
+    if (payload.session) {
+      appendLog(`已创建 ${payload.session.name}。`, 'success');
+      connectTerminal(payload.session.id, 'connect');
+    }
+  } catch (error) {
+    appendLog(`创建 Session 失败：${error.message}`, 'warn');
+  } finally {
+    openTerminalButton.disabled = false;
+  }
+}
+
+async function closeCurrentSession() {
+  if (!selectedSessionId) {
+    appendLog('当前没有可关闭的 Session。', 'warn');
+    return;
+  }
+
+  closeTerminalButton.disabled = true;
+
+  try {
+    const response = await fetch(`/api/sessions/${encodeURIComponent(selectedSessionId)}/close`, {
+      method: 'POST',
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? '关闭 Session 失败');
+    }
+
+    applySessions(payload.sessions ?? [], selectedSessionId);
+    if (payload.session) {
+      appendLog(`${payload.session.name} 已关闭。`, 'success');
+    }
+  } catch (error) {
+    appendLog(`关闭 Session 失败：${error.message}`, 'warn');
+  } finally {
+    closeTerminalButton.disabled = false;
   }
 }
 
@@ -1923,8 +2240,14 @@ async function runExecutor() {
     return;
   }
 
-  if (currentSession?.status !== 'running') {
+  if (getSessionStatus(currentSession) !== 'running' && getSessionStatus(currentSession) !== 'waiting') {
     appendLog('请先启动网页终端，再注入执行器命令。', 'warn');
+    setExecutorStatus('请先启动终端', 'warn', '当前没有运行中的终端会话，无法把命令注入进去。');
+    return;
+  }
+
+  if (!selectedSessionId) {
+    appendLog('请先选择一个 Session，再注入执行器命令。', 'warn');
     setExecutorStatus('请先启动终端', 'warn', '当前没有运行中的终端会话，无法把命令注入进去。');
     return;
   }
@@ -1940,6 +2263,7 @@ async function runExecutor() {
       },
       body: JSON.stringify({
         executorId: selectedExecutor.id,
+        sessionId: selectedSessionId,
         params: getExecutorParams(),
       }),
     });
@@ -1951,6 +2275,10 @@ async function runExecutor() {
 
     executorCommand.textContent = payload.command ?? getExecutorPreview(selectedExecutor);
     appendLog(`已将执行器“${selectedExecutor.name}”注入终端。`, 'success');
+    if (payload.session) {
+      upsertSessionLocal(payload.session);
+      renderSession(payload.session);
+    }
     const outputPath = payload.params?.summaryRelativePath ?? `docs/${getExecutorParams().outputFileName}.md`;
     lockExecutorStatus('已注入', 'success', `命令已写入终端，预期会生成 ${outputPath}。`);
     terminal?.focus();
@@ -2057,18 +2385,31 @@ taskList?.addEventListener('input', (event) => {
 taskList?.addEventListener('change', async (event) => {
   const workflowSelect = event.target.closest('select[data-action="workflow-status"]');
 
-  if (!workflowSelect) {
+  if (workflowSelect) {
+    const taskId = workflowSelect.dataset.taskId;
+    const workflowStatus = workflowSelect.value;
+
+    if (!taskId) {
+      return;
+    }
+
+    await updateTaskWorkflowStatus(taskId, workflowStatus);
     return;
   }
 
-  const taskId = workflowSelect.dataset.taskId;
-  const workflowStatus = workflowSelect.value;
+  const bindingSelect = event.target.closest('select[data-action="session-binding"]');
+
+  if (!bindingSelect) {
+    return;
+  }
+
+  const taskId = bindingSelect.dataset.taskId;
 
   if (!taskId) {
     return;
   }
 
-  await updateTaskWorkflowStatus(taskId, workflowStatus);
+  await updateTaskSessionBinding(taskId, bindingSelect.value);
 });
 taskList?.addEventListener('click', async (event) => {
   const actionButton = event.target.closest('button[data-action]');
@@ -2101,6 +2442,15 @@ taskList?.addEventListener('click', async (event) => {
 
   if (action === 'focus-terminal') {
     const task = tasks.find((item) => item.id === taskId) ?? null;
+    if (task?.linkedSessionId) {
+      selectedSessionId = task.linkedSessionId;
+      renderSessionCollection();
+      const session = getSessionById(task.linkedSessionId);
+      if (session) {
+        renderSession(session);
+        connectTerminal(session.id, 'connect');
+      }
+    }
     focusTerminalPanel(task);
     return;
   }
@@ -2213,17 +2563,33 @@ structureList?.addEventListener('click', (event) => {
 selectProjectButton.addEventListener('click', selectProject);
 refreshProjectButton.addEventListener('click', async () => {
   await loadCurrentProject();
-  const session = await loadTerminalSession();
+  const session = await loadSessions();
   await loadExecutors();
   tryRestoreRunningSession(session);
 });
 refreshExecutorsButton.addEventListener('click', loadExecutors);
 runExecutorButton.addEventListener('click', runExecutor);
-openTerminalButton.addEventListener('click', () => {
-  connectTerminal('connect');
-});
+openTerminalButton.addEventListener('click', createSession);
 reconnectTerminalButton.addEventListener('click', () => {
-  connectTerminal('reconnect');
+  connectTerminal(selectedSessionId, 'reconnect');
+});
+closeTerminalButton?.addEventListener('click', closeCurrentSession);
+sessionSelect?.addEventListener('change', () => {
+  selectedSessionId = sessionSelect.value || null;
+  renderSessionCollection();
+  renderSession(getSessionById(selectedSessionId));
+});
+sessionList?.addEventListener('click', (event) => {
+  const button = event.target.closest('button[data-action="select-session"]');
+
+  if (!button) {
+    return;
+  }
+
+  selectedSessionId = button.dataset.sessionId || null;
+  renderSessionCollection();
+  renderSession(getSessionById(selectedSessionId));
+  connectTerminal(selectedSessionId, 'connect');
 });
 
 renderProject(null);
@@ -2234,7 +2600,8 @@ setTerminalConnectionState('未连接');
 
 await loadHealth();
 await loadCurrentProject();
+await loadSessions();
 await loadExecutors();
 await loadTasks();
-const initialSession = await loadTerminalSession();
+const initialSession = getSessionById(selectedSessionId) ?? null;
 tryRestoreRunningSession(initialSession);

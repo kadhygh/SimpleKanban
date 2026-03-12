@@ -244,6 +244,43 @@ textarea:disabled {
   gap: 16px;
 }
 
+.session-switcher,
+.session-list {
+  display: grid;
+  gap: 12px;
+}
+
+.session-list {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.session-chip {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid #232836;
+  background: rgba(12, 14, 19, 0.72);
+  color: var(--text);
+  text-align: left;
+}
+
+.session-chip.is-selected {
+  border-color: rgba(124, 156, 255, 0.7);
+  box-shadow: inset 0 0 0 1px rgba(124, 156, 255, 0.18);
+}
+
+.session-chip-name {
+  font-weight: 700;
+}
+
+.session-chip-meta {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
 .terminal-root {
   width: 100%;
   height: 420px;

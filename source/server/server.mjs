@@ -23,15 +23,13 @@ const port = Number(process.env.PORT ?? 3210);
 const webRoot = path.resolve(process.cwd(), 'source/web');
 const nodeModulesRoot = path.resolve(process.cwd(), 'node_modules');
 const terminalSessionManager = createTerminalSessionManager();
-let activeTaskSessionLink = null;
 
 function now() {
   return new Date().toISOString();
 }
 
 async function reconcileTasksOnBoot() {
-  const activeSessionId = terminalSessionManager.getSnapshot()?.id ?? null;
-  const result = await markInterruptedTasksLost(activeSessionId);
+  const result = await markInterruptedTasksLost(null);
 
   if (result.changed) {
     console.log(`[M3] Marked ${result.affectedCount} task(s) as lost on boot.`);
@@ -41,6 +39,10 @@ async function reconcileTasksOnBoot() {
 function mapTaskStatusFromSessionStatus(sessionStatus) {
   if (sessionStatus === 'running' || sessionStatus === 'starting') {
     return 'running';
+  }
+
+  if (sessionStatus === 'waiting') {
+    return 'waiting';
   }
 
   if (sessionStatus === 'closed' || sessionStatus === 'error') {
@@ -65,18 +67,32 @@ function detectTaskWaitingState(output) {
     return false;
   }
 
-  return [
+  const keywordMatch = [
     'press any key',
     'continue?',
+    'need input',
+    'enter input',
     'password',
     'confirm',
     '[y/n]',
     '(y/n)',
     'waiting for input',
     'input required',
+    'input:',
     'permission',
     'allow',
   ].some((keyword) => text.includes(keyword));
+
+  if (keywordMatch) {
+    return true;
+  }
+
+  return [
+    /\benter\b.{0,20}\b(password|passcode|input|value|choice|selection)\b/,
+    /\b(confirm|approve|allow)\b.{0,20}\?/,
+    /\b(read-host|prompt)\b/,
+    /\b(password|passcode|input|value|choice|selection)\s*:\s*$/,
+  ].some((pattern) => pattern.test(text));
 }
 
 function buildPrimaryNoteAttachment(task, content) {
@@ -102,59 +118,51 @@ function buildPrimaryNoteAttachment(task, content) {
   };
 }
 
-async function syncLinkedTaskWithSession(session, extras = {}) {
-  if (!activeTaskSessionLink?.taskId) {
-    return null;
+async function syncTasksBoundToSession(session, extras = {}) {
+  const sessionId = session?.id ? String(session.id) : null;
+
+  if (!sessionId) {
+    return [];
   }
 
-  const task = await getTask(activeTaskSessionLink.taskId);
+  const allTasks = await listTasks();
+  const linkedTasks = allTasks.filter((task) => task.linkedSessionId === sessionId);
 
-  if (!task) {
-    activeTaskSessionLink = null;
-    return null;
+  if (linkedTasks.length === 0) {
+    return [];
   }
 
-  const nextStatus = extras.status ?? (session?.status ? mapTaskStatusFromSessionStatus(session.status) : task.status);
-  const nextSessionId = session?.id ?? activeTaskSessionLink.sessionId ?? task.linkedSessionId ?? null;
-  const nextActivityAt = extras.lastTerminalActivityAt ?? task.lastTerminalActivityAt;
-  const nextOutput = extras.lastTerminalOutput ?? task.lastTerminalOutput;
+  const nextStatus = extras.status ?? (session?.status ? mapTaskStatusFromSessionStatus(session.status) : 'idle');
+  const nextActivityAt = extras.lastTerminalActivityAt;
+  const nextOutput = extras.lastTerminalOutput;
+  const updates = [];
 
-  if (
-    task.status === nextStatus
-    && task.linkedSessionId === nextSessionId
-    && task.lastTerminalActivityAt === nextActivityAt
-    && task.lastTerminalOutput === nextOutput
-  ) {
-    if (!session || session.status === 'closed' || session.status === 'error') {
-      activeTaskSessionLink = null;
+  for (const task of linkedTasks) {
+    if (
+      task.runtimeStatus === nextStatus
+      && task.status === nextStatus
+      && task.lastTerminalActivityAt === (nextActivityAt ?? task.lastTerminalActivityAt)
+      && task.lastTerminalOutput === (nextOutput ?? task.lastTerminalOutput)
+    ) {
+      continue;
     }
-    return task;
+
+    updates.push(updateTask(task.id, {
+      runtimeStatus: nextStatus,
+      status: nextStatus,
+      linkedSessionId: sessionId,
+      lastStatusAt: now(),
+      lastTerminalActivityAt: nextActivityAt ?? task.lastTerminalActivityAt,
+      lastTerminalOutput: nextOutput ?? task.lastTerminalOutput,
+    }));
   }
 
-  const updatedTask = await updateTask(task.id, {
-    runtimeStatus: nextStatus,
-    status: nextStatus,
-    linkedSessionId: nextSessionId,
-    lastStatusAt: now(),
-    lastTerminalActivityAt: nextActivityAt,
-    lastTerminalOutput: nextOutput,
-  });
-
-  if (!session || session.status === 'closed' || session.status === 'error') {
-    activeTaskSessionLink = null;
-  } else if (updatedTask) {
-    activeTaskSessionLink = {
-      taskId: updatedTask.id,
-      sessionId: updatedTask.linkedSessionId,
-    };
-  }
-
-  return updatedTask;
+  return Promise.all(updates);
 }
 
-terminalSessionManager.subscribe((event) => {
+terminalSessionManager.subscribeAll((event) => {
   if (event.type === 'session') {
-    syncLinkedTaskWithSession(event.session).catch((error) => {
+    syncTasksBoundToSession(event.session).catch((error) => {
       console.error('Failed to sync task session state.', error);
     });
     return;
@@ -162,7 +170,13 @@ terminalSessionManager.subscribe((event) => {
 
   if (event.type === 'output') {
     const status = detectTaskWaitingState(event.data) ? 'waiting' : undefined;
-    syncLinkedTaskWithSession(terminalSessionManager.getSnapshot(), {
+    const session = terminalSessionManager.getSnapshot(event.sessionId);
+
+    if (status === 'waiting' && session?.status !== 'waiting') {
+      terminalSessionManager.patchSession(event.sessionId, { status: 'waiting' });
+    }
+
+    syncTasksBoundToSession(session, {
       status,
       lastTerminalActivityAt: event.at ?? now(),
       lastTerminalOutput: String(event.data ?? '').slice(-500),
@@ -315,13 +329,93 @@ async function handleProjectSelect(request, response) {
   }
 }
 
+async function listSessionSnapshots() {
+  const project = await readCurrentProject();
+  const allSessions = terminalSessionManager.listSnapshots();
+
+  if (!project?.path) {
+    return [];
+  }
+
+  return allSessions.filter((session) => session.projectPath === project.path);
+}
+
+function getSessionSnapshotOrNull(sessionId) {
+  if (!sessionId) {
+    return null;
+  }
+
+  return terminalSessionManager.getSnapshot(String(sessionId));
+}
+
+async function getLatestSessionSnapshot() {
+  const sessions = await listSessionSnapshots();
+  return sessions[0] ?? null;
+}
+
+function isReusableSession(session) {
+  return Boolean(session && (session.status === 'running' || session.status === 'waiting' || session.status === 'starting'));
+}
+
+async function createSessionForProject(body = {}) {
+  const project = await ensureCurrentProject();
+
+  return terminalSessionManager.createSession({
+    projectPath: project.path,
+    workdir: body.workdir ? path.resolve(body.workdir) : project.path,
+    cols: body.cols,
+    rows: body.rows,
+    name: body.name,
+  });
+}
+
+async function resolveTaskRunSession(task, body = {}) {
+  const requestedSession = getSessionSnapshotOrNull(body.sessionId);
+
+  if (requestedSession && isReusableSession(requestedSession)) {
+    return requestedSession;
+  }
+
+  const linkedSession = getSessionSnapshotOrNull(task.linkedSessionId);
+
+  if (linkedSession && isReusableSession(linkedSession)) {
+    return linkedSession;
+  }
+
+  return createSessionForProject({
+    cols: body.cols,
+    rows: body.rows,
+  });
+}
+
 async function handleTerminalSnapshot(response) {
-  sendJson(response, 200, { session: terminalSessionManager.getSnapshot() });
+  sendJson(response, 200, { session: await getLatestSessionSnapshot() });
 }
 
 async function handleTerminalClose(response) {
-  const session = terminalSessionManager.close();
+  const latestSession = await getLatestSessionSnapshot();
+  const session = latestSession ? terminalSessionManager.close(latestSession.id) : null;
   sendJson(response, 200, { session });
+}
+
+async function handleSessionList(response) {
+  sendJson(response, 200, { sessions: await listSessionSnapshots() });
+}
+
+async function handleSessionCreate(request, response) {
+  try {
+    const body = await readBody(request);
+    const session = await createSessionForProject(body);
+    sendJson(response, 201, { session, sessions: await listSessionSnapshots() });
+  } catch (error) {
+    console.error(error);
+    sendJson(response, 500, { error: error.message || 'Failed to create session.' });
+  }
+}
+
+async function handleSessionClose(response, sessionId) {
+  const session = terminalSessionManager.close(sessionId);
+  sendJson(response, 200, { session, sessions: await listSessionSnapshots() });
 }
 
 async function handleTaskList(response) {
@@ -478,6 +572,44 @@ async function handleTaskWorkflowStatusUpdate(request, response) {
   }
 }
 
+async function handleTaskSessionBindingUpdate(request, response) {
+  try {
+    const body = await readBody(request);
+    const taskId = String(body.taskId ?? '').trim();
+    const rawSessionId = body.sessionId == null ? '' : String(body.sessionId).trim();
+    const sessionId = rawSessionId || null;
+
+    if (!taskId) {
+      sendJson(response, 400, { error: 'taskId is required.' });
+      return;
+    }
+
+    const task = await getTask(taskId);
+
+    if (!task) {
+      sendJson(response, 404, { error: 'Task not found.' });
+      return;
+    }
+
+    if (sessionId && !getSessionSnapshotOrNull(sessionId)) {
+      sendJson(response, 404, { error: 'Session not found.' });
+      return;
+    }
+
+    const updatedTask = await updateTask(taskId, {
+      linkedSessionId: sessionId,
+      runtimeStatus: sessionId ? task.runtimeStatus : 'idle',
+      status: sessionId ? task.status : 'idle',
+      lastStatusAt: now(),
+    });
+
+    sendJson(response, 200, { task: updatedTask });
+  } catch (error) {
+    console.error(error);
+    sendJson(response, 500, { error: error.message || 'Failed to update task session binding.' });
+  }
+}
+
 async function handleTaskRun(request, response) {
   try {
     const body = await readBody(request);
@@ -495,19 +627,9 @@ async function handleTaskRun(request, response) {
       return;
     }
 
-    const project = await ensureCurrentProject();
     const params = normalizeExecutorParams(task.executorId, body.params ?? {});
     const command = buildExecutorCommand(task.executorId, params);
-    const session = terminalSessionManager.ensureActiveSession({
-      projectPath: project.path,
-      cols: body.cols,
-      rows: body.rows,
-    });
-
-    activeTaskSessionLink = {
-      taskId: task.id,
-      sessionId: session.id,
-    };
+    const session = await resolveTaskRunSession(task, body);
 
     const updatedTask = await updateTask(task.id, {
       workflowStatus: getNextWorkflowStatusOnRun(task),
@@ -519,11 +641,12 @@ async function handleTaskRun(request, response) {
       lastTerminalActivityAt: session.lastOutputAt ?? null,
     });
 
-    terminalSessionManager.write(`${command}\r`);
+    terminalSessionManager.patchSession(session.id, { status: 'running', error: null });
+    terminalSessionManager.write(session.id, `${command}\r`);
 
     sendJson(response, 200, {
       task: updatedTask,
-      session: terminalSessionManager.getSnapshot(),
+      session: terminalSessionManager.getSnapshot(session.id),
       command,
       params,
     });
@@ -567,28 +690,30 @@ async function handleExecutorInject(request, response) {
   try {
     const body = await readBody(request);
     const executorId = String(body.executorId ?? '').trim();
+    const sessionId = String(body.sessionId ?? '').trim();
 
     if (!executorId) {
       sendJson(response, 400, { error: 'executorId is required.' });
       return;
     }
 
-    const session = terminalSessionManager.getSnapshot();
+    const session = getSessionSnapshotOrNull(sessionId);
 
-    if (!session || session.status !== 'running') {
+    if (!session || (session.status !== 'running' && session.status !== 'waiting')) {
       sendJson(response, 400, { error: '请先启动网页终端，再执行注入。' });
       return;
     }
 
     const params = normalizeExecutorParams(executorId, body.params ?? {});
     const command = buildExecutorCommand(executorId, params);
-    terminalSessionManager.write(`${command}\r`);
+    terminalSessionManager.patchSession(session.id, { status: 'running', error: null });
+    terminalSessionManager.write(session.id, `${command}\r`);
 
     sendJson(response, 200, {
       executorId,
       params,
       command,
-      session: terminalSessionManager.getSnapshot(),
+      session: terminalSessionManager.getSnapshot(session.id),
     });
   } catch (error) {
     console.error(error);
@@ -618,28 +743,42 @@ async function handleWebSocketMessage(socket, raw) {
 
   try {
     if (message.type === 'connect') {
-      const project = await ensureCurrentProject();
-      const session = terminalSessionManager.ensureActiveSession({
-        projectPath: project.path,
-        cols: message.cols,
-        rows: message.rows,
-      });
-      socket.send(JSON.stringify({ type: 'session', session }));
+      const sessionId = String(message.sessionId ?? '').trim();
+
+      if (!sessionId) {
+        socket.send(JSON.stringify({ type: 'error', message: 'sessionId is required.' }));
+        return;
+      }
+
+      const session = getSessionSnapshotOrNull(sessionId);
+
+      if (!session) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Session not found.' }));
+        return;
+      }
+
+      if (typeof socket.attachSession === 'function') {
+        socket.attachSession(sessionId);
+      }
+
       return;
     }
 
     if (message.type === 'input') {
-      terminalSessionManager.write(String(message.data ?? ''));
+      const sessionId = String(message.sessionId ?? socket.currentSessionId ?? '').trim();
+      terminalSessionManager.write(sessionId, String(message.data ?? ''));
       return;
     }
 
     if (message.type === 'resize') {
-      terminalSessionManager.resize(message.cols, message.rows);
+      const sessionId = String(message.sessionId ?? socket.currentSessionId ?? '').trim();
+      terminalSessionManager.resize(sessionId, message.cols, message.rows);
       return;
     }
 
     if (message.type === 'close') {
-      terminalSessionManager.close();
+      const sessionId = String(message.sessionId ?? socket.currentSessionId ?? '').trim();
+      terminalSessionManager.close(sessionId);
       return;
     }
 
@@ -651,6 +790,7 @@ async function handleWebSocketMessage(socket, raw) {
 
 async function requestHandler(request, response) {
   const requestUrl = new URL(request.url, `http://${request.headers.host ?? `${host}:${port}`}`);
+  const sessionCloseMatch = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/close$/);
 
   if (request.method === 'GET' && requestUrl.pathname === '/api/health') {
     sendJson(response, 200, {
@@ -669,6 +809,21 @@ async function requestHandler(request, response) {
 
   if (request.method === 'POST' && requestUrl.pathname === '/api/project/select') {
     await handleProjectSelect(request, response);
+    return;
+  }
+
+  if (request.method === 'GET' && requestUrl.pathname === '/api/sessions') {
+    await handleSessionList(response);
+    return;
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/sessions') {
+    await handleSessionCreate(request, response);
+    return;
+  }
+
+  if (request.method === 'POST' && sessionCloseMatch) {
+    await handleSessionClose(response, decodeURIComponent(sessionCloseMatch[1]));
     return;
   }
 
@@ -694,6 +849,11 @@ async function requestHandler(request, response) {
 
   if (request.method === 'POST' && requestUrl.pathname === '/api/tasks/workflow-status') {
     await handleTaskWorkflowStatusUpdate(request, response);
+    return;
+  }
+
+  if (request.method === 'POST' && requestUrl.pathname === '/api/tasks/session-binding') {
+    await handleTaskSessionBindingUpdate(request, response);
     return;
   }
 
@@ -753,13 +913,24 @@ const server = http.createServer((request, response) => {
 const webSocketServer = new WebSocketServer({ noServer: true });
 
 webSocketServer.on('connection', (socket) => {
-  const unsubscribe = terminalSessionManager.subscribe((event) => {
-    if (socket.readyState !== WebSocket.OPEN) {
-      return;
+  let unsubscribe = null;
+
+  socket.currentSessionId = null;
+  socket.attachSession = (sessionId) => {
+    if (unsubscribe) {
+      unsubscribe();
+      unsubscribe = null;
     }
 
-    socket.send(JSON.stringify(event));
-  });
+    socket.currentSessionId = sessionId;
+    unsubscribe = terminalSessionManager.subscribe(sessionId, (event) => {
+      if (socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      socket.send(JSON.stringify(event));
+    });
+  };
 
   socket.on('message', (raw) => {
     handleWebSocketMessage(socket, raw).catch((error) => {
@@ -771,7 +942,9 @@ webSocketServer.on('connection', (socket) => {
   });
 
   socket.on('close', () => {
-    unsubscribe();
+    if (unsubscribe) {
+      unsubscribe();
+    }
   });
 });
 
@@ -789,7 +962,7 @@ server.on('upgrade', (request, socket, head) => {
 });
 
 function shutdown() {
-  terminalSessionManager.close();
+  terminalSessionManager.closeAll();
   webSocketServer.close();
   server.close();
 }

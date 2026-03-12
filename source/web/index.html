@@ -177,12 +177,13 @@
         <div class="panel-head terminal-head">
           <div>
             <h2>Session Terminal</h2>
-            <p class="hint terminal-subtitle">当前阶段仍是单机、单项目、单活跃终端；下一步会升级为多 Session Registry。</p>
+            <p class="hint terminal-subtitle">当前阶段已进入 `M8.1`：保持一个终端观察窗，但支持最多 3 个 Session 的创建、切换、关闭和任务绑定。</p>
           </div>
 
           <div class="terminal-actions">
-            <button id="open-terminal" class="primary-button">启动终端</button>
-            <button id="reconnect-terminal" class="secondary-button">重连</button>
+            <button id="open-terminal" class="primary-button">新建 Session</button>
+            <button id="reconnect-terminal" class="secondary-button">连接当前</button>
+            <button id="close-terminal" class="secondary-button">关闭当前</button>
           </div>
         </div>
 
@@ -199,7 +200,20 @@
             <span class="label">终端尺寸</span>
             <strong id="terminal-size">-- x --</strong>
           </div>
+          <div>
+            <span class="label">Session 池</span>
+            <strong id="terminal-session-count">0 / 3</strong>
+          </div>
         </div>
+
+        <div class="session-switcher">
+          <label class="executor-field">
+            <span class="label">当前观察 Session</span>
+            <select id="session-select" class="executor-select"></select>
+          </label>
+        </div>
+
+        <div id="session-list" class="session-list"></div>
 
         <div id="terminal-root" class="terminal-root"></div>
       </section>

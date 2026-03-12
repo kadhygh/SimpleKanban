@@ -5,6 +5,8 @@ import pty from 'node-pty';
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 32;
 const OUTPUT_BUFFER_LIMIT = 200;
+const SESSION_LIMIT = 3;
+const ACTIVE_SESSION_STATUSES = new Set(['starting', 'running', 'waiting']);
 
 function now() {
   return new Date().toISOString();
@@ -41,76 +43,144 @@ function resolveShell() {
   };
 }
 
-export function createTerminalSessionManager() {
-  let activePty = null;
-  let session = null;
-  let recentEvents = [];
-  const listeners = new Set();
+function withRuntimeStatus(session) {
+  if (!session) {
+    return null;
+  }
 
-  function getSnapshot() {
-    if (!session) {
+  return {
+    ...session,
+    runtimeStatus: session.status,
+  };
+}
+
+function isSessionActive(session) {
+  return Boolean(session && ACTIVE_SESSION_STATUSES.has(session.status));
+}
+
+export function createTerminalSessionManager() {
+  const sessions = new Map();
+  const globalListeners = new Set();
+  let nextSessionNameIndex = 1;
+
+  function listEntries() {
+    return [...sessions.values()].sort((left, right) => {
+      const leftTime = Date.parse(left.session.createdAt ?? '') || 0;
+      const rightTime = Date.parse(right.session.createdAt ?? '') || 0;
+      return rightTime - leftTime;
+    });
+  }
+
+  function getEntry(sessionId) {
+    if (!sessionId) {
       return null;
     }
 
-    return { ...session };
+    return sessions.get(String(sessionId)) ?? null;
   }
 
-  function emit(event) {
+  function getSnapshot(sessionId) {
+    if (!sessionId) {
+      return null;
+    }
+
+    return withRuntimeStatus(getEntry(sessionId)?.session ?? null);
+  }
+
+  function listSnapshots() {
+    return listEntries().map((entry) => withRuntimeStatus(entry.session));
+  }
+
+  function emit(entry, event) {
+    if (!entry) {
+      return;
+    }
+
     if (event.type === 'output') {
-      recentEvents.push(event);
-      if (recentEvents.length > OUTPUT_BUFFER_LIMIT) {
-        recentEvents = recentEvents.slice(-OUTPUT_BUFFER_LIMIT);
+      entry.recentEvents.push(event);
+      if (entry.recentEvents.length > OUTPUT_BUFFER_LIMIT) {
+        entry.recentEvents = entry.recentEvents.slice(-OUTPUT_BUFFER_LIMIT);
       }
     }
 
-    for (const listener of listeners) {
+    for (const listener of entry.listeners) {
+      listener(event);
+    }
+
+    for (const listener of globalListeners) {
       listener(event);
     }
   }
 
-  function emitSession() {
-    emit({ type: 'session', session: getSnapshot() });
+  function emitSession(entry) {
+    emit(entry, { type: 'session', session: withRuntimeStatus(entry.session) });
   }
 
-  function updateSession(patch) {
-    if (!session) {
-      return;
+  function updateSession(entry, patch) {
+    if (!entry) {
+      return null;
     }
 
-    session = {
-      ...session,
+    entry.session = {
+      ...entry.session,
       ...patch,
     };
 
-    emitSession();
+    emitSession(entry);
+    return withRuntimeStatus(entry.session);
   }
 
-  function disposeActivePty() {
-    if (!activePty) {
+  function disposePty(entry) {
+    if (!entry?.pty) {
       return;
     }
 
-    activePty.removeAllListeners?.();
-    activePty = null;
+    entry.pty.removeAllListeners?.();
+    entry.pty = null;
   }
 
-  function subscribe(listener, options = {}) {
-    listeners.add(listener);
+  function nextSessionName() {
+    const value = `Session ${nextSessionNameIndex}`;
+    nextSessionNameIndex += 1;
+    return value;
+  }
+
+  function getActiveSessionCount() {
+    return listEntries().filter((entry) => isSessionActive(entry.session)).length;
+  }
+
+  function subscribe(sessionId, listener, options = {}) {
+    const entry = getEntry(sessionId);
+
+    if (!entry) {
+      throw new Error('Session not found.');
+    }
+
+    entry.listeners.add(listener);
 
     if (options.replay !== false) {
-      listener({ type: 'session', session: getSnapshot() });
-      for (const event of recentEvents) {
+      listener({ type: 'session', session: withRuntimeStatus(entry.session) });
+      for (const event of entry.recentEvents) {
         listener(event);
       }
     }
 
     return () => {
-      listeners.delete(listener);
+      entry.listeners.delete(listener);
     };
   }
 
-  function ensureActiveSession(options) {
-    const projectPath = options.projectPath;
+  function subscribeAll(listener) {
+    globalListeners.add(listener);
+
+    return () => {
+      globalListeners.delete(listener);
+    };
+  }
+
+  function createSession(options = {}) {
+    const projectPath = String(options.projectPath ?? '').trim();
+    const workdir = String(options.workdir ?? projectPath).trim();
     const cols = clampSize(options.cols, DEFAULT_COLS);
     const rows = clampSize(options.rows, DEFAULT_ROWS);
 
@@ -118,164 +188,204 @@ export function createTerminalSessionManager() {
       throw new Error('Current project is required before starting a terminal session.');
     }
 
-    if (activePty && session?.status === 'running' && session.projectPath === projectPath) {
-      resize(cols, rows);
-      return getSnapshot();
+    if (!workdir) {
+      throw new Error('Session workdir is required.');
     }
 
-    if (activePty) {
-      close();
+    if (getActiveSessionCount() >= SESSION_LIMIT) {
+      throw new Error(`最多只能同时保留 ${SESSION_LIMIT} 个活跃 Session。`);
     }
-
-    recentEvents = [];
 
     const shellConfig = resolveShell();
     const createdAt = now();
-    const nextSession = {
-      id: crypto.randomUUID(),
-      projectPath,
-      cwd: projectPath,
-      shell: shellConfig.shell,
-      pid: null,
-      cols,
-      rows,
-      status: 'starting',
-      createdAt,
-      startedAt: createdAt,
-      endedAt: null,
-      lastOutputAt: null,
-      exitCode: null,
-      error: null,
+    const sessionId = crypto.randomUUID();
+    const entry = {
+      pty: null,
+      recentEvents: [],
+      listeners: new Set(),
+      session: {
+        id: sessionId,
+        name: String(options.name ?? '').trim() || nextSessionName(),
+        projectPath,
+        workdir,
+        cwd: workdir,
+        shell: shellConfig.shell,
+        pid: null,
+        cols,
+        rows,
+        status: 'starting',
+        createdAt,
+        startedAt: createdAt,
+        endedAt: null,
+        lastOutputAt: null,
+        exitCode: null,
+        error: null,
+      },
     };
 
-    session = nextSession;
-    emitSession();
-
-    const sessionId = nextSession.id;
-
-    let terminal = null;
+    sessions.set(sessionId, entry);
+    emitSession(entry);
 
     try {
-      terminal = pty.spawn(shellConfig.shell, shellConfig.args, {
+      entry.pty = pty.spawn(shellConfig.shell, shellConfig.args, {
         name: 'xterm-256color',
         cols,
         rows,
-        cwd: projectPath,
+        cwd: workdir,
         env: {
           ...process.env,
           TERM: 'xterm-256color',
         },
       });
     } catch (error) {
-      session = {
-        ...nextSession,
+      entry.session = {
+        ...entry.session,
         status: 'error',
         endedAt: now(),
         error: error.message || 'Failed to start PTY session.',
       };
-
-      emitSession();
+      emitSession(entry);
       throw error;
     }
 
-    activePty = terminal;
-    updateSession({
-      pid: terminal.pid,
+    updateSession(entry, {
+      pid: entry.pty.pid,
       status: 'running',
       error: null,
     });
 
-    terminal.onData((data) => {
-      if (!session || session.id !== sessionId) {
-        return;
-      }
-
+    entry.pty.onData((data) => {
       const timestamp = now();
-      session = {
-        ...session,
+      entry.session = {
+        ...entry.session,
         lastOutputAt: timestamp,
       };
 
-      emit({
+      emit(entry, {
         type: 'output',
+        sessionId,
         data,
         at: timestamp,
       });
     });
 
-    terminal.onExit(({ exitCode, signal }) => {
-      if (activePty === terminal) {
-        disposeActivePty();
+    entry.pty.onExit(({ exitCode, signal }) => {
+      if (entry.pty) {
+        disposePty(entry);
       }
 
-      if (!session || session.id !== sessionId) {
-        return;
-      }
-
-      session = {
-        ...session,
+      entry.session = {
+        ...entry.session,
         status: 'closed',
         endedAt: now(),
         exitCode,
       };
 
-      emit({ type: 'exit', exitCode, signal });
-      emitSession();
+      emit(entry, {
+        type: 'exit',
+        sessionId,
+        exitCode,
+        signal,
+        session: withRuntimeStatus(entry.session),
+      });
+      emitSession(entry);
     });
 
-    return getSnapshot();
+    return withRuntimeStatus(entry.session);
   }
 
-  function write(data) {
-    if (!activePty || !session || session.status !== 'running') {
+  function write(sessionId, data) {
+    const entry = getEntry(sessionId);
+
+    if (!entry?.pty || !isSessionActive(entry.session)) {
       throw new Error('Terminal session is not running.');
     }
 
-    activePty.write(data);
+    if (entry.session.status === 'waiting') {
+      updateSession(entry, {
+        status: 'running',
+      });
+    }
+
+    entry.pty.write(data);
   }
 
-  function resize(cols, rows) {
+  function resize(sessionId, cols, rows) {
+    const entry = getEntry(sessionId);
+
+    if (!entry) {
+      throw new Error('Session not found.');
+    }
+
     const nextCols = clampSize(cols, DEFAULT_COLS);
     const nextRows = clampSize(rows, DEFAULT_ROWS);
 
-    if (session) {
-      session = {
-        ...session,
-        cols: nextCols,
-        rows: nextRows,
-      };
-      emitSession();
+    entry.session = {
+      ...entry.session,
+      cols: nextCols,
+      rows: nextRows,
+    };
+    emitSession(entry);
+
+    if (entry.pty) {
+      entry.pty.resize(nextCols, nextRows);
     }
 
-    if (activePty) {
-      activePty.resize(nextCols, nextRows);
-    }
+    return withRuntimeStatus(entry.session);
   }
 
-  function close() {
-    if (!activePty) {
-      return getSnapshot();
+  function patchSession(sessionId, patch) {
+    const entry = getEntry(sessionId);
+
+    if (!entry) {
+      throw new Error('Session not found.');
     }
 
-    activePty.kill();
-    return getSnapshot();
+    return updateSession(entry, patch);
+  }
+
+  function close(sessionId) {
+    const entry = getEntry(sessionId);
+
+    if (!entry) {
+      return null;
+    }
+
+    if (!entry.pty) {
+      return withRuntimeStatus(entry.session);
+    }
+
+    entry.pty.kill();
+    return withRuntimeStatus(entry.session);
+  }
+
+  function closeAll() {
+    for (const entry of listEntries()) {
+      close(entry.session.id);
+    }
   }
 
   function closeIfProjectChanged(projectPath) {
-    if (!session || session.projectPath === projectPath) {
-      return;
-    }
+    for (const entry of listEntries()) {
+      if (entry.session.projectPath === projectPath) {
+        continue;
+      }
 
-    close();
+      close(entry.session.id);
+    }
   }
 
   return {
     close,
+    closeAll,
     closeIfProjectChanged,
-    ensureActiveSession,
+    createSession,
     getSnapshot,
+    listSnapshots,
+    patchSession,
     resize,
     subscribe,
+    subscribeAll,
     write,
   };
 }

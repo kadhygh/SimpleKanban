@@ -30,7 +30,7 @@ SimpleKanban 是一个面向 Unity 本地开发流程的任务与执行管理器
 | 结构层（依赖关系展示） | 已完成当前节点 | Task 支持 `dependencyIds`；结构视图支持选中高亮、focus-only 与环依赖提示 |
 | 无限画布 / 看板 | 已完成 v1 当前节点 | `M7.1` 已完成任务节点投影与详情联动；`M7.2` 已完成工作台 <-> canvas 双向定位并由你本人验证通过 |
 | v1 阶段收口 | 已准备结束 | `v1` 当前实现阶段已完成验证收口；后续新方向转入 `docs/推进/v2/` |
-| v2 工作台规划 | 已完成当前节点 | v2 第一刀已由你本人验证通过：主页按 `ListWorkspace` 收口，并开始拆分 `TaskCard.workflowStatus` 与运行态；下一步进入多 `session` 最小闭环 |
+| v2 工作台规划 | 已完成当前节点 | `M8.1` 已由你本人验证通过：已实现最多 3 个 `Session` 的最小池子、任务绑定/复用和单观察窗切换；下一步补 `parsed events` 切口并推进 `ListWorkspace` 监控能力 |
 
 ## 3. 当前锁定决策
 
@@ -185,3 +185,4 @@ SimpleKanban 是一个面向 Unity 本地开发流程的任务与执行管理器
 1. 主页已按 `ListWorkspace` 收口；
 2. `CanvasWorkspace` 与 `ListWorkspace` 的分工已在现有页面中落出第一版；
 3. `TaskCard` 已开始拆分“人工推进状态”和“运行态”。
+4. `M8.1` 已完成当前节点：支持最多 3 个 `Session`、任务绑定/复用、单观察窗切换，以及 `waiting` 状态回流。
