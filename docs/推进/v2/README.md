@@ -35,14 +35,17 @@
 当前下一步：
 
 - `M8.1` 当前节点已由你本人验证通过：已支持最多 3 个 `Session`、任务绑定/复用和单观察窗切换；
-- 下一步优先补一层轻量 `parsed events`，把等待态从纯关键词检测升级为“原始 PTY 数据 + 解析后状态事件”双通道；
-- 在此基础上再推进 `M8.2 ListWorkspace` 的监控能力，而不是先回头补完整终端历史。
+- 这轮 `parsed events`、绑定即时同步、输入守卫已由你本人手动验证通过；
+- 在此基础上又顺手补了一层轻量 `Session` 生命周期事件：`session.started` / `session.closed` / `session.error`；
+- 当前下一步应直接继续推进 `M8.2 ListWorkspace` 的监控能力，而不是回头重做主流程或先补完整终端历史。
 
 ## 当前文件
 
 - `docs/推进/v2/修订版里程碑草案.md`：围绕对象模型、双工作区视图和多 session 路线的正式草案
 - `docs/推进/v2/Session等待态与ParsedEvents切口.md`：围绕 `waiting` / `input required` 检测与 `parsed events` 引入方式的后续切口说明
 - `docs/推进/v2/交接.md`：当前跨设备续做时的交接状态、待测项和下一步门槛
+- `docs/推进/v2/顺手重构与延期重构清单.md`：当前阶段哪些点适合顺手重构、哪些点应延后统一收口的清单
+- `docs/推进/v2/happy参考/README.md`：`happy` 项目中可借鉴点、吸收方式与当前阶段不建议照搬内容的专项整理
 
 ## 参考关系
 

@@ -1,4 +1,4 @@
-﻿const healthStatus = document.querySelector('#health-status');
+const healthStatus = document.querySelector('#health-status');
 const apiVersion = document.querySelector('#api-version');
 const projectPath = document.querySelector('#project-path');
 const projectName = document.querySelector('#project-name');
@@ -2055,10 +2055,16 @@ function connectTerminal(sessionId = selectedSessionId, mode = 'connect') {
     }
 
     if (payload.type === 'parsed_event') {
-      if (payload.eventName === 'session.waiting') {
+      if (payload.eventName === 'session.started') {
+        appendLog(`Session 已启动：${payload.detail}`, 'success');
+      } else if (payload.eventName === 'session.waiting') {
         appendLog(`Session 进入等待态：${payload.detail}`, 'warn');
       } else if (payload.eventName === 'session.resumed') {
         appendLog(`Session 已恢复运行：${payload.detail}`, 'success');
+      } else if (payload.eventName === 'session.closed') {
+        appendLog(`Session 已关闭：${payload.detail}`, 'warn');
+      } else if (payload.eventName === 'session.error') {
+        appendLog(`Session 错误：${payload.detail}`, 'warn');
       } else {
         appendLog(`Session 事件：${payload.eventName}`, 'warn');
       }
@@ -2075,7 +2081,6 @@ function connectTerminal(sessionId = selectedSessionId, mode = 'connect') {
       renderSession(payload.session ?? null);
       await refreshTasksSilently();
       await loadSessions(payload.session?.id ?? selectedSessionId);
-      appendLog(`终端已退出，exitCode=${payload.exitCode ?? 'null'}`, 'warn');
       terminal.writeln('');
       terminal.writeln('[Terminal exited]');
       return;

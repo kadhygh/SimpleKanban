@@ -16,7 +16,7 @@ import {
   markInterruptedTasksLost,
 } from './lib/project-store.mjs';
 import { ensureDirectoryPath, selectProjectFolder } from './lib/folder-dialog.mjs';
-import { createSessionResumedEvent, parseSessionOutput } from './lib/session-output-parser.mjs';
+import { createSessionLifecycleEvent, createSessionResumedEvent, parseSessionOutput } from './lib/session-output-parser.mjs';
 import { createTerminalSessionManager } from './lib/terminal-session-manager.mjs';
 
 const host = process.env.HOST ?? '127.0.0.1';
@@ -24,6 +24,7 @@ const port = Number(process.env.PORT ?? 3210);
 const webRoot = path.resolve(process.cwd(), 'source/web');
 const nodeModulesRoot = path.resolve(process.cwd(), 'node_modules');
 const terminalSessionManager = createTerminalSessionManager();
+const sessionStatusHistory = new Map();
 
 function now() {
   return new Date().toISOString();
@@ -126,25 +127,45 @@ async function syncTasksBoundToSession(session, extras = {}) {
   return Promise.all(updates);
 }
 
-function writeToSession(sessionId, data) {
+function writeToSession(sessionId, data, options = {}) {
+  const ignoreIfNotRunning = options.ignoreIfNotRunning === true;
   const session = getSessionSnapshotOrNull(sessionId);
 
   if (!session) {
+    if (ignoreIfNotRunning) {
+      return false;
+    }
+
     throw new Error('Session not found.');
   }
 
+  try {
+    terminalSessionManager.write(sessionId, data);
+  } catch (error) {
+    if (ignoreIfNotRunning && error.message === 'Terminal session is not running.') {
+      return false;
+    }
+
+    throw error;
+  }
+
   if (session.status === 'waiting') {
-    terminalSessionManager.patchSession(sessionId, {
-      status: 'running',
-    });
     terminalSessionManager.publishEvent(sessionId, createSessionResumedEvent());
   }
 
-  terminalSessionManager.write(sessionId, data);
+  return true;
 }
 
 terminalSessionManager.subscribeAll((event) => {
   if (event.type === 'session') {
+    const previousStatus = sessionStatusHistory.get(event.session.id);
+    sessionStatusHistory.set(event.session.id, event.session.status);
+
+    const lifecycleEvent = createSessionLifecycleEvent(previousStatus, event.session);
+    if (lifecycleEvent) {
+      terminalSessionManager.publishEvent(event.session.id, lifecycleEvent);
+    }
+
     syncTasksBoundToSession(event.session).catch((error) => {
       console.error('Failed to sync task session state.', error);
     });
@@ -764,7 +785,7 @@ async function handleWebSocketMessage(socket, raw) {
 
     if (message.type === 'input') {
       const sessionId = String(message.sessionId ?? socket.currentSessionId ?? '').trim();
-      writeToSession(sessionId, String(message.data ?? ''));
+      writeToSession(sessionId, String(message.data ?? ''), { ignoreIfNotRunning: true });
       return;
     }
 
